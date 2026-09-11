@@ -7,7 +7,7 @@ import torch.nn.functional as F
 
 from ultralytics.nn.modules.conv import Conv
 
-__all__ = ["CARAFE"]
+__all__ = ["CARAFE", "ASPP"]
 
 
 class CARAFE(nn.Module):
@@ -119,3 +119,88 @@ class CARAFE(nn.Module):
         out = out.permute(0, 1, 4, 2, 5, 3).contiguous()
         # View as (B, C, H * s, W * s)
         return out.view(b, c, h * s, w * s)
+
+
+class ASPP(nn.Module):
+    """Atrous Spatial Pyramid Pooling (ASPP) module with DeepLabV3+ architecture.
+
+    Features 5 parallel branches:
+    1. 1x1 standard convolution
+    2. 3x3 dilated convolution with dilation rate r1
+    3. 3x3 dilated convolution with dilation rate r2
+    4. 3x3 dilated convolution with dilation rate r3
+    5. Global average pooling branch with 1x1 conv and bilinear interpolation
+    Followed by concatenation of all branches and a 1x1 projection back to the target channel dimension.
+
+    Reference:
+        Chen et al., "Encoder-Decoder with Atrous Separable Convolution for Semantic Image Segmentation", ECCV 2018.
+        https://arxiv.org/abs/1802.02611
+    """
+
+    def __init__(
+        self,
+        c1: int,
+        c2: int = None,
+        rates: tuple = (3, 6, 9),
+        c_mid: int = None,
+    ):
+        """Initializes the ASPP module.
+
+        Args:
+            c1 (int): Input channel dimension.
+            c2 (int, optional): Output channel dimension. Defaults to c1 (channel preservation).
+            rates (tuple): Dilation rates for the three parallel atrous convolutions. Default (3, 6, 9).
+            c_mid (int, optional): Internal intermediate channel dimension per branch. Defaults to max(c1 // 4, 64).
+        """
+        super().__init__()
+        self.c1 = c1
+        self.c2 = c2 if c2 is not None else c1
+        self.c_mid = c_mid if c_mid is not None else max(self.c2 // 4, 64)
+        if isinstance(rates, list):
+            rates = tuple(rates)
+        self.rates = rates
+
+        # Branch 1: 1x1 Conv
+        self.branch1 = Conv(c1, self.c_mid, k=1)
+
+        # Branch 2, 3, 4: 3x3 Dilated Convolutions
+        self.branch2 = Conv(c1, self.c_mid, k=3, p=rates[0], d=rates[0])
+        self.branch3 = Conv(c1, self.c_mid, k=3, p=rates[1], d=rates[1])
+        self.branch4 = Conv(c1, self.c_mid, k=3, p=rates[2], d=rates[2])
+
+        # Branch 5: Global Image Pooling
+        self.pool = nn.AdaptiveAvgPool2d(1)
+        self.branch5 = Conv(c1, self.c_mid, k=1)
+
+        # Output projection
+        total_mid_channels = self.c_mid * 5
+        self.project = Conv(total_mid_channels, self.c2, k=1)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Forward pass through ASPP parallel branches and projection.
+
+        Args:
+            x (torch.Tensor): Input tensor of shape (B, C, H, W).
+
+        Returns:
+            (torch.Tensor): Context-enhanced output tensor of shape (B, C2, H, W).
+        """
+        _, _, h, w = x.shape
+
+        b1 = self.branch1(x)
+        b2 = self.branch2(x)
+        b3 = self.branch3(x)
+        b4 = self.branch4(x)
+
+        x_pool = self.pool(x)
+        if self.training and x.shape[0] == 1:
+            # Handle batch size 1 in training mode so BatchNorm has >1 value per channel
+            x_pool = F.interpolate(x_pool, size=(h, w), mode="nearest")
+            b5 = self.branch5(x_pool)
+        else:
+            b5 = self.branch5(x_pool)
+            b5 = F.interpolate(b5, size=(h, w), mode="bilinear", align_corners=False)
+
+        out = torch.cat([b1, b2, b3, b4, b5], dim=1)
+        return self.project(out)
+

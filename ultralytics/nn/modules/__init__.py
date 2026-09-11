@@ -77,6 +77,7 @@ from .conv import (
     SpatialAttention,
 )
 from .custom_seg import (
+    ASPP,
     CARAFE,
 )
 from .head import (
@@ -113,6 +114,7 @@ from .transformer import (
 
 __all__ = (
     "AIFI",
+    "ASPP",
     "C1",
     "C2",
     "C2PSA",

@@ -76,6 +76,7 @@ from ultralytics.nn.modules import (
     YOLOESegment,
     YOLOESegment26,
     v10Detect,
+    ASPP,
     CARAFE,
 )
 from ultralytics.utils import (
@@ -2183,7 +2184,7 @@ def parse_model(d, ch, verbose=True):
             c2 = args[0]
             c1 = ch[f]
             args = [*args[1:]]
-        elif m is CARAFE:
+        elif m in frozenset({CARAFE, ASPP}):
             c2 = ch[f]
             args = [ch[f], *args]
         else:

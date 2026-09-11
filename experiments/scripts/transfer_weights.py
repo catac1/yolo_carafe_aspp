@@ -9,7 +9,7 @@ from ultralytics import YOLO
 from ultralytics.nn.tasks import torch_safe_load
 
 
-def transfer_weights(config_path: str, checkpoint_path: str, output_path: str, report_path: str = None):
+def transfer_weights(config_path: str, checkpoint_path: str, output_path: str, report_path: str = None, layer_shift_after: int = None, layer_shift: int = 1):
     """Transfers compatible weights from a baseline checkpoint to a custom architecture model."""
     print(f"Building custom model from config: {config_path}")
     custom_yolo = YOLO(config_path)
@@ -32,8 +32,18 @@ def transfer_weights(config_path: str, checkpoint_path: str, output_path: str, r
     new_state_dict = {}
 
     for name, target_param in target_state_dict.items():
-        if name in source_state_dict:
-            src_param = source_state_dict[name]
+        src_name = name
+        if src_name not in source_state_dict and layer_shift_after is not None:
+            parts = name.split(".")
+            if len(parts) > 1 and parts[1].isdigit():
+                layer_idx = int(parts[1])
+                if layer_idx > layer_shift_after:
+                    candidate = ".".join([parts[0], str(layer_idx - layer_shift)] + parts[2:])
+                    if candidate in source_state_dict:
+                        src_name = candidate
+
+        if src_name in source_state_dict:
+            src_param = source_state_dict[src_name]
             if src_param.shape == target_param.shape:
                 new_state_dict[name] = src_param
                 matched_keys.append(name)
@@ -114,6 +124,8 @@ if __name__ == "__main__":
     parser.add_argument("--checkpoint", type=str, default="checkpoints/yolo26s-seg.pt", help="Path to baseline checkpoint")
     parser.add_argument("--output", type=str, default="checkpoints/yolo26s-seg-carafe_pretrained.pt", help="Path for output checkpoint")
     parser.add_argument("--report", type=str, default="experiments/notes/A1_weight_transfer_report.md", help="Path for markdown transfer report")
+    parser.add_argument("--layer-shift-after", type=int, default=None, help="Layer index after which target layers shift")
+    parser.add_argument("--layer-shift", type=int, default=1, help="Offset amount for shifted layers")
     args = parser.parse_args()
 
-    transfer_weights(args.config, args.checkpoint, args.output, args.report)
+    transfer_weights(args.config, args.checkpoint, args.output, args.report, args.layer_shift_after, args.layer_shift)
