@@ -79,6 +79,8 @@ from .conv import (
 from .custom_seg import (
     ASPP,
     CARAFE,
+    DeepLabV3PlusProto,
+    DeepLabV3PlusSegment26,
 )
 from .head import (
     OBB,
@@ -159,6 +161,8 @@ __all__ = (
     "DWConvTranspose2d",
     "DeformableTransformerDecoder",
     "DeformableTransformerDecoderLayer",
+    "DeepLabV3PlusProto",
+    "DeepLabV3PlusSegment26",
     "Depth",
     "Detect",
     "Focus",

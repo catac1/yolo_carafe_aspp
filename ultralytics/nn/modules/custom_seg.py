@@ -6,8 +6,9 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from ultralytics.nn.modules.conv import Conv
+from ultralytics.nn.modules.head import Detect, Segment26
 
-__all__ = ["CARAFE", "ASPP"]
+__all__ = ["CARAFE", "ASPP", "DeepLabV3PlusProto", "DeepLabV3PlusSegment26"]
 
 
 class CARAFE(nn.Module):
@@ -203,4 +204,105 @@ class ASPP(nn.Module):
 
         out = torch.cat([b1, b2, b3, b4, b5], dim=1)
         return self.project(out)
+
+
+class DeepLabV3PlusProto(nn.Module):
+    """DeepLabV3+-style low-level decoder and mask prototype generator.
+
+    Combines:
+    1. Low-level feature from P2 (stride 4) projected via a 1x1 conv to low channels (e.g. 48).
+    2. High-level feature from P3 (stride 8) upsampled to stride 4 using CARAFE.
+    3. Channel concatenation and two 3x3 refinement convolutions.
+    4. Mask prototype generation (nm=32 prototypes).
+    5. Auxiliary semantic segmentation branch for YOLO26 training loss.
+    """
+
+    def __init__(
+        self,
+        c_p2: int,
+        c_high: int,
+        c_mid: int = 256,
+        nm: int = 32,
+        low_proj_channels: int = 48,
+        nc: int = 80,
+    ):
+        """Initializes DeepLabV3PlusProto decoder module."""
+        super().__init__()
+        self.c_p2 = c_p2
+        self.c_high = c_high
+        self.c_mid = c_mid
+        self.nm = nm
+
+        # 1. Low-level P2 projection
+        self.low_proj = Conv(c_p2, low_proj_channels, k=1)
+
+        # 2. CARAFE upsampler: high-level feature (stride 8) to stride 4 (scale 2)
+        self.carafe_up = CARAFE(c_high, scale=2, kernel_size=5)
+
+        # 3. Decoder fusion and refinement
+        fuse_channels = low_proj_channels + c_high
+        self.refine1 = Conv(fuse_channels, c_mid, k=3)
+        self.refine2 = Conv(c_mid, c_mid, k=3)
+
+        # 4. Final prototype projection (stride 4, nm=32 masks)
+        self.proto_out = Conv(c_mid, nm, k=1)
+
+        # Semantic segmentation auxiliary branch for YOLO26 training
+        self.semseg = nn.Sequential(
+            Conv(c_mid, c_mid, k=3),
+            nn.Conv2d(c_mid, nc, 1),
+        )
+
+    def forward(self, p2: torch.Tensor, high_feat: torch.Tensor, return_semantic: bool = True):
+        """Forward pass fusing low-level P2 detail and high-level context via CARAFE."""
+        p2_low = self.low_proj(p2)
+        high_up = self.carafe_up(high_feat)
+
+        if p2_low.shape[2:] != high_up.shape[2:]:
+            high_up = F.interpolate(high_up, size=p2_low.shape[2:], mode="bilinear", align_corners=False)
+
+        fused = torch.cat([p2_low, high_up], dim=1)
+        refined = self.refine2(self.refine1(fused))
+        proto = self.proto_out(refined)
+
+        if self.training and return_semantic:
+            semantic = self.semseg(refined)
+            return (proto, semantic)
+        return proto
+
+
+class DeepLabV3PlusSegment26(Segment26):
+    """YOLO26 Segment head with DeepLabV3+-style low-level decoder and CARAFE prototype refinement.
+
+    Takes [P2, P3, P4, P5] features:
+    - P2 (stride 4) is used for low-level boundary refinement in DeepLabV3PlusProto.
+    - P3, P4, P5 (strides 8, 16, 32) are passed to the 3 detection and mask-coefficient heads,
+      maintaining 100% parameter compatibility with baseline YOLO26s-Seg detection weights.
+    """
+
+    def __init__(self, nc: int = 80, nm: int = 32, npr: int = 256, reg_max=16, end2end=False, ch: tuple = ()):
+        """Initialize DeepLabV3PlusSegment26 with [P2, P3, P4, P5] features."""
+        c_p2 = ch[0]
+        det_ch = tuple(ch[1:])
+        super().__init__(nc, nm, npr, reg_max, end2end, det_ch)
+        self.proto = DeepLabV3PlusProto(c_p2=c_p2, c_high=det_ch[0], c_mid=self.npr, nm=self.nm, nc=nc)
+
+    def forward(self, x: list[torch.Tensor]) -> tuple | list[torch.Tensor] | dict[str, torch.Tensor]:
+        """Forward pass: [P2, P3, P4, P5] -> detection on [P3, P4, P5] + DeepLabV3+ protos."""
+        p2, det_feats = x[0], x[1:]
+        outputs = Detect.forward(self, det_feats)
+        preds = outputs[1] if isinstance(outputs, tuple) else outputs
+        proto = self.proto(p2, det_feats[0])
+        if isinstance(preds, dict):
+            if "one2one" in preds:
+                preds["one2many"]["proto"] = proto
+                preds["one2one"]["proto"] = (
+                    tuple(p.detach() for p in proto) if isinstance(proto, tuple) else proto.detach()
+                )
+            else:
+                preds["proto"] = proto
+        if self.training:
+            return preds
+        return (outputs, proto) if self.export else ((outputs[0], proto), preds)
+
 
