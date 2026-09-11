@@ -76,6 +76,7 @@ from ultralytics.nn.modules import (
     YOLOESegment,
     YOLOESegment26,
     v10Detect,
+    CARAFE,
 )
 from ultralytics.utils import (
     DEFAULT_CFG_DICT,
@@ -2182,6 +2183,9 @@ def parse_model(d, ch, verbose=True):
             c2 = args[0]
             c1 = ch[f]
             args = [*args[1:]]
+        elif m is CARAFE:
+            c2 = ch[f]
+            args = [ch[f], *args]
         else:
             c2 = ch[f]
 

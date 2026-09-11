@@ -76,6 +76,9 @@ from .conv import (
     RepConv,
     SpatialAttention,
 )
+from .custom_seg import (
+    CARAFE,
+)
 from .head import (
     OBB,
     OBB26,
@@ -140,6 +143,7 @@ __all__ = (
     "C3Ghost",
     "C3k2",
     "C3x",
+    "CARAFE",
     "CBFuse",
     "CBLinear",
     "ChannelAttention",
