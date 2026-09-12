@@ -100,10 +100,10 @@ In Ultralytics, the standard dataset configuration [`ultralytics/cfg/datasets/co
 
 ### Default Download Location
 
-The default `datasets_dir` resolves to **`$HOME/yolo_custom/coco_dataset`** (`Path.home() / "yolo_custom" / "coco_dataset"`), so COCO-Seg lands at:
+The default `datasets_dir` is **`/home/user/yolo_custom/coco_dataset`**, so COCO-Seg lands at:
 
 ```text
-$HOME/yolo_custom/coco_dataset/coco/
+/home/user/yolo_custom/coco_dataset/coco/
 ├── images/
 │   ├── train2017/     (118,287 images)
 │   └── val2017/       (5,000 images)
@@ -114,10 +114,10 @@ $HOME/yolo_custom/coco_dataset/coco/
 └── val2017.txt
 ```
 
-It is under your home directory, so no elevated permissions are needed — just confirm it exists and has room (§1 gives the ~45 GB figure):
+The path is hardcoded, so it assumes the training account is `user`. On any other account, set `datasets_dir` explicitly (Method 1 below). Confirm it exists and has room (§1 gives the ~45 GB figure):
 
 ```bash
-mkdir -p "$HOME/yolo_custom/coco_dataset" && df -h "$HOME/yolo_custom/coco_dataset"
+mkdir -p /home/user/yolo_custom/coco_dataset && df -h /home/user/yolo_custom/coco_dataset
 ```
 
 > **Note:** the default only applies when no Ultralytics settings file exists yet. If the machine has already run Ultralytics, its saved `datasets_dir` is preserved across upgrades — override it explicitly with Method 1 below.
@@ -126,17 +126,15 @@ mkdir -p "$HOME/yolo_custom/coco_dataset" && df -h "$HOME/yolo_custom/coco_datas
 
 #### Method 1: Change Ultralytics Global Setting (Recommended)
 
-- **Via Python:** (`$HOME` is not expanded inside a Python string — build the path instead)
+- **Via Python:**
     ```python
-    from pathlib import Path
-
     from ultralytics import settings
 
-    settings.update({"datasets_dir": str(Path.home() / "yolo_custom" / "coco_dataset")})
+    settings.update({"datasets_dir": "/home/user/yolo_custom/coco_dataset"})
     ```
 - **Via CLI:**
     ```bash
-    uv run --no-sync yolo settings datasets_dir=$HOME/yolo_custom/coco_dataset
+    uv run --no-sync yolo settings datasets_dir=/home/user/yolo_custom/coco_dataset
     ```
 
 #### Method 2: Custom Location in Python Script
@@ -190,25 +188,47 @@ To debug training without waiting for a 25 GB download:
 ### 3.1 If the Dataset Is Missing
 
 ```text
-ls: cannot access '$HOME/yolo_custom/coco_dataset/coco/val2017.txt': No such file or directory
+ls: cannot access '/home/user/yolo_custom/coco_dataset/coco/val2017.txt': No such file or directory
 ```
 
-`val2017.txt` ships inside the labels archive, so this means the download has not run (or ran somewhere else). Check where Ultralytics is actually pointing first — a settings file written before `datasets_dir` was changed keeps its old value, because the schema migration preserves existing settings:
+```text
+WARNING ⚠️ Dataset 'coco.yaml' images not found, missing path '/home/user/p4_poc/vision-server/datasets/coco/val2017.txt'
+```
+
+`val2017.txt` ships inside the labels archive, so either the download has not run, or Ultralytics is pointing somewhere other than `datasets_dir`'s default.
+
+**A path under the repository is the giveaway.** Ultralytics caches settings in `~/.config/Ultralytics/settings.json`, and the schema migration *preserves existing values* — so a box that ran Ultralytics before this project changed the default keeps the old computed location (`<repo parent>/datasets`) forever. Changing the default in code does not migrate it.
+
+Check what is actually in effect:
 
 ```bash
 uv run --no-sync yolo settings | grep datasets_dir
 ```
 
-If it is not `$HOME/yolo_custom/coco_dataset`, set it explicitly:
+If it is not `/home/user/yolo_custom/coco_dataset`, override it — this rewrites the cached settings file and persists:
 
 ```bash
-uv run --no-sync yolo settings datasets_dir=$HOME/yolo_custom/coco_dataset
+uv run --no-sync yolo settings datasets_dir=/home/user/yolo_custom/coco_dataset
+```
+
+To discard every cached setting and fall back to the defaults compiled into this branch:
+
+```bash
+uv run --no-sync yolo settings reset
+# or: rm ~/.config/Ultralytics/settings.json
+```
+
+If a dataset was already downloaded to the stale location, move it rather than re-downloading 20 GB:
+
+```bash
+mkdir -p /home/user/yolo_custom/coco_dataset
+mv /home/user/p4_poc/vision-server/datasets/coco /home/user/yolo_custom/coco_dataset/
 ```
 
 Then confirm the directory is writeable by the training user and has ~45 GB free:
 
 ```bash
-mkdir -p $HOME/yolo_custom/coco_dataset && df -h $HOME/yolo_custom/coco_dataset
+mkdir -p /home/user/yolo_custom/coco_dataset && df -h /home/user/yolo_custom/coco_dataset
 ```
 
 Now download (~20 GB over the network, expect 20-60 minutes):
@@ -220,14 +240,14 @@ uv run --no-sync python -c "from ultralytics.data.utils import check_det_dataset
 The expected result — note the labels archive is what creates the `.txt` index files:
 
 ```bash
-ls $HOME/yolo_custom/coco_dataset/coco/
+ls /home/user/yolo_custom/coco_dataset/coco/
 # images/  labels/  train2017.txt  val2017.txt  LICENSE  README.txt
 ```
 
 Once `experiments/scripts/check_coco.py` passes (§4), reclaim ~20 GB by deleting the archives that Ultralytics leaves behind:
 
 ```bash
-rm -f $HOME/yolo_custom/coco_dataset/coco/images/*.zip $HOME/yolo_custom/coco_dataset/*.zip
+rm -f /home/user/yolo_custom/coco_dataset/coco/images/*.zip /home/user/yolo_custom/coco_dataset/*.zip
 ```
 
 To train immediately without waiting for the download, use `data=coco8-seg.yaml` — it fetches in seconds and exercises the identical code path.

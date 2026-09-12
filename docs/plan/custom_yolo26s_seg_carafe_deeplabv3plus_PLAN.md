@@ -465,7 +465,7 @@ For a GPU server, do not put the full dataset inside the Git repository.
 Example preferred location:
 
 ```text
-$HOME/yolo_custom/coco_dataset/coco
+/home/user/yolo_custom/coco_dataset/coco
 ```
 
 or another fast local NVMe path.
@@ -473,7 +473,7 @@ or another fast local NVMe path.
 Set the Ultralytics dataset directory:
 
 ```bash
-uv run yolo settings datasets_dir=$HOME/yolo_custom/coco_dataset
+uv run yolo settings datasets_dir=/home/user/yolo_custom/coco_dataset
 ```
 
 Check:
@@ -485,7 +485,7 @@ uv run yolo settings
 Expected final structure is conceptually:
 
 ```text
-$HOME/yolo_custom/coco_dataset/
+/home/user/yolo_custom/coco_dataset/
 └── coco/
     ├── images/
     │   ├── train2017/
@@ -535,8 +535,8 @@ Do not download `test2017` unless a later official COCO test-dev submission is p
 After download:
 
 ```bash
-find $HOME/yolo_custom/coco_dataset/coco/images/train2017 -type f | wc -l
-find $HOME/yolo_custom/coco_dataset/coco/images/val2017 -type f | wc -l
+find /home/user/yolo_custom/coco_dataset/coco/images/train2017 -type f | wc -l
+find /home/user/yolo_custom/coco_dataset/coco/images/val2017 -type f | wc -l
 ```
 
 Expected image counts:
@@ -1702,7 +1702,7 @@ PY
 mv yolo26s-seg.pt checkpoints/yolo26s-seg.pt
 
 # 6. Configure dataset path
-uv run yolo settings datasets_dir=$HOME/yolo_custom/coco_dataset
+uv run yolo settings datasets_dir=/home/user/yolo_custom/coco_dataset
 
 # 7. Download/resolve COCO and reproduce baseline validation
 uv run yolo segment val \
