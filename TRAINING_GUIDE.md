@@ -135,6 +135,35 @@ This checks:
 | **A3** | CARAFE + ASPP                                               | `experiments/configs/yolo26s-seg-carafe-aspp.yaml`                     | `checkpoints/yolo26s-seg-carafe-aspp_pretrained.pt`               |
 | **A4** | **Full Architecture** (CARAFE + ASPP + DeepLabV3+ Decoder)  | `experiments/configs/yolo26s-seg-carafe-aspp-deeplabv3plus.yaml`       | `checkpoints/yolo26s-seg-carafe-aspp-deeplabv3plus_pretrained.pt` |
 
+### 5.1 Rebuilding the Checkpoints on a New Machine
+
+`.gitignore` excludes `*.pt`, so **none of the checkpoints are tracked in git** — a fresh clone has no `checkpoints/` directory and training fails with:
+
+```text
+FileNotFoundError: [Errno 2] No such file or directory: 'checkpoints/yolo26s-seg-carafe-aspp-deeplabv3plus_pretrained.pt'
+```
+
+Rebuild the full A0–A4 set on the training machine before the first run:
+
+```bash
+bash experiments/scripts/setup_checkpoints.sh
+```
+
+This downloads the `yolo26s-seg.pt` baseline from the Ultralytics release assets, then warm-starts A1–A4 from it with `transfer_weights.py` and rewrites the reports in `experiments/notes/`. It takes about a minute and needs no GPU.
+
+Verify the result against the committed transfer reports — the numbers are deterministic, so any deviation means a config or baseline mismatch:
+
+| Stage | Transferred parameters | Matched tensors | Newly initialized tensors |
+| :---- | :--------------------- | :-------------- | :------------------------ |
+| A1    | 11,546,542 (98.94%)    | 844             | 16                        |
+| A2    | 11,546,542 (84.06%)    | 844             | 36                        |
+| A3    | 11,546,542 (83.06%)    | 844             | 52                        |
+| A4    | 10,775,127 (79.43%)    | 798             | 86                        |
+
+The A2–A4 configs insert an ASPP block at index 11, so every later layer shifts by one — those three transfers need `--layer-shift-after 10 --layer-shift 1`, which the script passes for you. Running `transfer_weights.py` on them without it silently matches only 240 tensors instead of 844 and warm-starts roughly 40% of the weights instead of 80%+, so always check the table above rather than assuming success.
+
+Alternatively, copy an existing `checkpoints/` directory across (~131 MB) with `rsync` or `scp` — the results are identical, since the baseline download is byte-for-byte the same file.
+
 ---
 
 ## 6. How to Train the Model
