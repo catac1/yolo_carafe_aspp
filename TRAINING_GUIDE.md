@@ -17,21 +17,60 @@ In Ultralytics, the standard dataset configuration [`ultralytics/cfg/datasets/co
 
 ---
 
-## 2. Dataset Storage Location
+## 2. Dataset Storage Location & Customization
 
-Ultralytics uses the global `datasets_dir` configuration setting to locate and download datasets.
-
-### Check Current Location
-```bash
-uv run --no-sync yolo settings
+### Default Download Location
+When you run **Option B** (`check_det_dataset('coco.yaml', autodownload=True)`), Ultralytics checks the global `datasets_dir` configuration setting. On your machine, it downloads by default to:
+```text
+C:\Users\kchpr\Team2\datasets\coco\
+├── images\
+│   ├── train2017\     (118,287 images)
+│   └── val2017\       (5,000 images)
+├── labels\
+│   ├── train2017\     (118,287 polygon .txt files)
+│   └── val2017\       (5,000 polygon .txt files)
+├── train2017.txt
+└── val2017.txt
 ```
-*Current configuration on this machine:* `C:\Users\kchpr\Team2\datasets` (Drive `C:` has **>980 GB free**).
 
-### (Optional) Redirect to Another Drive/Folder
-To change where datasets are downloaded (e.g., to drive `E:`):
-```bash
-uv run --no-sync yolo settings datasets_dir="E:/datasets"
+### How to Customize the Dataset Location
+
+You can customize where the dataset is downloaded using any of the following 3 methods:
+
+#### Method 1: Change Ultralytics Global Setting (Recommended)
+- **Via Python:**
+  ```python
+  from ultralytics import settings
+  settings.update({"datasets_dir": "E:/custom_datasets"})
+  ```
+- **Via CLI:**
+  ```bash
+  uv run --no-sync yolo settings datasets_dir="E:/custom_datasets"
+  ```
+*Result:* Option B will download to `E:\custom_datasets\coco`.
+
+#### Method 2: Custom Location in Python Script
+You can set the location dynamically right before triggering Option B:
+```python
+from ultralytics import settings
+from ultralytics.data.utils import check_det_dataset
+
+# Set custom target directory
+settings.update({"datasets_dir": "E:/custom_datasets"})
+
+# Download COCO-Seg directly to E:/custom_datasets/coco
+check_det_dataset("coco.yaml", autodownload=True)
 ```
+
+#### Method 3: Custom YAML with Absolute Path
+Create a YAML file (e.g. `experiments/configs/coco_custom.yaml`) specifying an absolute path:
+```yaml
+path: E:/custom_datasets/coco  # Absolute root path
+train: train2017.txt
+val: val2017.txt
+...
+```
+Because `path` is absolute, Ultralytics ignores `datasets_dir` and downloads directly into `E:/custom_datasets/coco`.
 
 ---
 
