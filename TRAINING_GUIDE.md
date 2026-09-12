@@ -509,7 +509,7 @@ docker run --shm-size=16g ...     # or --ipc=host
 sudo mount -o remount,size=16G /dev/shm
 ```
 
-**If you cannot** — no root, no control over how the container starts — this branch handles it for you. `build_dataloader` checks `/dev/shm` before spawning workers and, when it is below 1 GB, switches PyTorch to its `file_system` sharing strategy, which passes tensors through ordinary temporary files instead of shared memory. You will see:
+**If you cannot** — no root, no control over how the container starts — this branch handles it for you. `ultralytics/data/build.py` checks `/dev/shm` **at import**, before any worker can be forked, and when it is below 1 GB switches PyTorch to its `file_system` sharing strategy, which passes tensors through ordinary files under `TMPDIR` instead of shared memory. The check must run this early because workers inherit the strategy from the parent at fork time. You will see:
 
 ```text
 WARNING /dev/shm has only 68MB available, below the 1024MB needed by 6 dataloader workers.
@@ -519,7 +519,9 @@ Switching torch tensor sharing to 'file_system' to avoid worker 'Bus error' cras
 Training then proceeds normally. Two caveats with that strategy:
 
 - It consumes **file descriptors** rather than shared memory. If workers still fail, raise the limit — this needs no root, up to the hard limit: `ulimit -n 65535`. Check the ceiling with `ulimit -Hn`.
-- A hard-killed process can leave stray files in `/tmp`. Clear them between runs if `/tmp` fills.
+- A hard-killed process can leave stray files in `TMPDIR`. Clear them between runs if it fills.
+- Batches now land in `TMPDIR` (default `/tmp`), so that must be real disk with room — check `df -h /tmp`. If `/tmp` is itself a small tmpfs, point it somewhere with space: `export TMPDIR=/home/user/yolo_custom/tmp`.
+- Override the automatic decision with `YOLO_FILE_SHARING=1` to force file sharing on, or `0` to force it off.
 
 Lowering `WORKERS` reduces the pressure but costs throughput, and on a small `/dev/shm` even `WORKERS=2` can fail — the fallback above is the reliable fix.
 

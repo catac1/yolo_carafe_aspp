@@ -315,34 +315,43 @@ def build_grounding(
     )
 
 
-def use_file_sharing_if_shm_small(nw: int) -> None:
-    """Switch to file-based tensor sharing when /dev/shm is too small for the worker pool.
+def use_file_sharing_if_shm_small() -> None:
+    """Switch to file-based tensor sharing when /dev/shm is too small to stage dataloader batches.
 
-    PyTorch's default 'file_descriptor' sharing strategy stages every in-flight batch in /dev/shm.
-    Containers commonly cap that at 64MB, which a 640px segmentation batch exceeds on its own, and
-    the symptom is a mid-epoch 'DataLoader worker killed by signal: Bus error' rather than a clean
-    startup failure. The 'file_system' strategy uses regular temporary files instead, so training
-    survives a small /dev/shm without any host configuration change.
+    PyTorch's default 'file_descriptor' strategy stages every in-flight batch in /dev/shm via
+    shm_open. Containers commonly cap that at 64MB, which a single 640px segmentation batch exceeds,
+    producing 'No space left on device' or a worker 'Bus error'. The 'file_system' strategy uses
+    ordinary files under TMPDIR instead, so training survives a small /dev/shm with no host change.
 
-    Args:
-        nw (int): Number of dataloader worker processes; no-op when workers run in-process.
+    Runs at import, before any worker can be forked, because the strategy must already be set in the
+    parent for workers to inherit it. Set YOLO_FILE_SHARING=1 to force it on or 0 to force it off.
     """
-    if nw <= 0 or not LINUX:
+    if not LINUX or torch.multiprocessing.get_sharing_strategy() == "file_system":
         return
-    try:
-        st = os.statvfs("/dev/shm")
-        available = st.f_bavail * st.f_frsize
-    except OSError:
+    override = os.getenv("YOLO_FILE_SHARING")
+    if override == "0":
         return
-    if available >= SHM_MIN_BYTES or torch.multiprocessing.get_sharing_strategy() == "file_system":
-        return
+    if override == "1":
+        available = -1
+    else:
+        try:
+            st = os.statvfs("/dev/shm")
+            available = st.f_bavail * st.f_frsize
+        except OSError:
+            return
+        if available >= SHM_MIN_BYTES:
+            return
     torch.multiprocessing.set_sharing_strategy("file_system")
+    size = "forced by YOLO_FILE_SHARING=1" if available < 0 else f"only {available >> 20}MB available"
     LOGGER.warning(
-        f"/dev/shm has only {available >> 20}MB available, below the {SHM_MIN_BYTES >> 20}MB "
-        f"needed by {nw} dataloader workers. Switching torch tensor sharing to 'file_system' to avoid "
-        f"worker 'Bus error' crashes. Raise the open-file limit if workers fail ('ulimit -n 65535'), or "
-        f"start the container with '--shm-size=16g' or '--ipc=host' to use shared memory instead."
+        f"/dev/shm {size}, below the {SHM_MIN_BYTES >> 20}MB dataloader workers need. Switching torch "
+        f"tensor sharing to 'file_system', which stages batches under TMPDIR ({os.getenv('TMPDIR', '/tmp')}) "
+        f"instead. If workers still fail, raise the open-file limit ('ulimit -n 65535'), or start the "
+        f"container with '--shm-size=16g' or '--ipc=host'."
     )
+
+
+use_file_sharing_if_shm_small()  # must run before any DataLoader forks a worker
 
 
 def build_dataloader(
@@ -393,7 +402,6 @@ def build_dataloader(
     # Do not create more worker processes than final loader batches. Single-batch loaders run in-process to avoid
     # persistent DataLoader worker pools that add overhead and can stall tiny datasets while holding CUDA context.
     nw = min(os.cpu_count() // max(nd, 1), workers, 0 if batches <= 1 else batches)  # number of workers
-    use_file_sharing_if_shm_small(nw)
     generator = torch.Generator()
     generator.manual_seed((6148914691236517205 + RANK + seed) % (1 << 64))
     pin_memory = nd > 0 and pin_memory
