@@ -1,15 +1,23 @@
 # Ultralytics 🚀 AGPL-3.0 License - https://ultralytics.com/license
 """Pretrained weight transfer and audit script for YOLO26 segmentation experiments."""
 
+from __future__ import annotations
+
 import argparse
 from pathlib import Path
-import torch
 
 from ultralytics import YOLO
 from ultralytics.nn.tasks import torch_safe_load
 
 
-def transfer_weights(config_path: str, checkpoint_path: str, output_path: str, report_path: str = None, layer_shift_after: int = None, layer_shift: int = 1):
+def transfer_weights(
+    config_path: str,
+    checkpoint_path: str,
+    output_path: str,
+    report_path: str | None = None,
+    layer_shift_after: int | None = None,
+    layer_shift: int = 1,
+):
     """Transfers compatible weights from a baseline checkpoint to a custom architecture model."""
     print(f"Building custom model from config: {config_path}")
     custom_yolo = YOLO(config_path)
@@ -38,7 +46,7 @@ def transfer_weights(config_path: str, checkpoint_path: str, output_path: str, r
             if len(parts) > 1 and parts[1].isdigit():
                 layer_idx = int(parts[1])
                 if layer_idx > layer_shift_after:
-                    candidate = ".".join([parts[0], str(layer_idx - layer_shift)] + parts[2:])
+                    candidate = ".".join([parts[0], str(layer_idx - layer_shift), *parts[2:]])
                     if candidate in source_state_dict:
                         src_name = candidate
 
@@ -54,7 +62,7 @@ def transfer_weights(config_path: str, checkpoint_path: str, output_path: str, r
             missing_keys.append(name)
             new_state_dict[name] = target_param
 
-    for name in source_state_dict.keys():
+    for name in source_state_dict:
         if name not in target_state_dict:
             unexpected_keys.append(name)
 
@@ -63,10 +71,12 @@ def transfer_weights(config_path: str, checkpoint_path: str, output_path: str, r
     # Calculate parameter counts
     total_params = sum(p.numel() for p in model.parameters())
     transferred_params = sum(target_state_dict[k].numel() for k in matched_keys)
-    new_params = sum(target_state_dict[k].numel() for k in missing_keys) + sum(target_state_dict[k[0]].numel() for k in shape_mismatched_keys)
+    new_params = sum(target_state_dict[k].numel() for k in missing_keys) + sum(
+        target_state_dict[k[0]].numel() for k in shape_mismatched_keys
+    )
     transfer_ratio = (transferred_params / total_params) * 100 if total_params > 0 else 0.0
 
-    print(f"Transfer Summary:")
+    print("Transfer Summary:")
     print(f"  Total Parameters: {total_params:,}")
     print(f"  Transferred Parameters: {transferred_params:,} ({transfer_ratio:.2f}%)")
     print(f"  New/Randomly Initialized Parameters: {new_params:,} ({100 - transfer_ratio:.2f}%)")
@@ -120,11 +130,24 @@ def transfer_weights(config_path: str, checkpoint_path: str, output_path: str, r
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Transfer weights from baseline to custom model")
-    parser.add_argument("--config", type=str, default="experiments/configs/yolo26s-seg-carafe.yaml", help="Path to custom model config")
-    parser.add_argument("--checkpoint", type=str, default="checkpoints/yolo26s-seg.pt", help="Path to baseline checkpoint")
-    parser.add_argument("--output", type=str, default="checkpoints/yolo26s-seg-carafe_pretrained.pt", help="Path for output checkpoint")
-    parser.add_argument("--report", type=str, default="experiments/notes/A1_weight_transfer_report.md", help="Path for markdown transfer report")
-    parser.add_argument("--layer-shift-after", type=int, default=None, help="Layer index after which target layers shift")
+    parser.add_argument(
+        "--config", type=str, default="experiments/configs/yolo26s-seg-carafe.yaml", help="Path to custom model config"
+    )
+    parser.add_argument(
+        "--checkpoint", type=str, default="checkpoints/yolo26s-seg.pt", help="Path to baseline checkpoint"
+    )
+    parser.add_argument(
+        "--output", type=str, default="checkpoints/yolo26s-seg-carafe_pretrained.pt", help="Path for output checkpoint"
+    )
+    parser.add_argument(
+        "--report",
+        type=str,
+        default="experiments/notes/A1_weight_transfer_report.md",
+        help="Path for markdown transfer report",
+    )
+    parser.add_argument(
+        "--layer-shift-after", type=int, default=None, help="Layer index after which target layers shift"
+    )
     parser.add_argument("--layer-shift", type=int, default=1, help="Offset amount for shifted layers")
     args = parser.parse_args()
 
