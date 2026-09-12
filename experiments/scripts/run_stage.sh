@@ -55,6 +55,7 @@ IMGSZ="${IMGSZ:-640}"
 WORKERS="${WORKERS:-6}"
 CACHE="${CACHE:-}"
 SEED="${SEED:-0}"
+SCALE="${SCALE:-s}"
 DATA="${DATA:-coco.yaml}"
 PROJECT="${PROJECT:-experiments/results}"
 FORCE="${FORCE:-0}"
@@ -63,11 +64,11 @@ PROBE_FRACTION="${PROBE_FRACTION:-0.01}"
 
 # stage : architecture yaml : warm-start checkpoint
 STAGES=(
-    "A0:ultralytics/cfg/models/26/yolo26-seg.yaml:checkpoints/yolo26s-seg.pt"
-    "A1:experiments/configs/yolo26s-seg-carafe.yaml:checkpoints/yolo26s-seg-carafe_pretrained.pt"
-    "A2:experiments/configs/yolo26s-seg-aspp.yaml:checkpoints/yolo26s-seg-aspp_pretrained.pt"
-    "A3:experiments/configs/yolo26s-seg-carafe-aspp.yaml:checkpoints/yolo26s-seg-carafe-aspp_pretrained.pt"
-    "A4:experiments/configs/yolo26s-seg-carafe-aspp-deeplabv3plus.yaml:checkpoints/yolo26s-seg-carafe-aspp-deeplabv3plus_pretrained.pt"
+    "A0:ultralytics/cfg/models/26/yolo26${SCALE}-seg.yaml:checkpoints/yolo26${SCALE}-seg.pt"
+    "A1:experiments/configs/yolo26${SCALE}-seg-carafe.yaml:checkpoints/yolo26${SCALE}-seg-carafe_pretrained.pt"
+    "A2:experiments/configs/yolo26${SCALE}-seg-aspp.yaml:checkpoints/yolo26${SCALE}-seg-aspp_pretrained.pt"
+    "A3:experiments/configs/yolo26${SCALE}-seg-carafe-aspp.yaml:checkpoints/yolo26${SCALE}-seg-carafe-aspp_pretrained.pt"
+    "A4:experiments/configs/yolo26${SCALE}-seg-carafe-aspp-deeplabv3plus.yaml:checkpoints/yolo26${SCALE}-seg-carafe-aspp-deeplabv3plus_pretrained.pt"
 )
 
 usage() {
@@ -100,6 +101,11 @@ if [ -z "$config" ]; then
     exit 2
 fi
 
+case "$SCALE" in
+    n|s|m|l|x) ;;
+    *) echo "error: SCALE must be one of n s m l x, got '$SCALE'" >&2; exit 2 ;;
+esac
+
 case "$gpu" in
     ''|*[!0-9]*) echo "error: GPU must be a single index, got '$gpu'" >&2; usage; exit 2 ;;
 esac
@@ -111,7 +117,13 @@ if ! py -c "import cv2, torch, ultralytics" 2>/dev/null; then
     exit 1
 fi
 
-[ -f "$config" ] || { echo "error: missing config $config" >&2; exit 1; }
+# A scaled name (yolo26s-seg-carafe.yaml) is resolved against the unscaled file
+# (yolo26-seg-carafe.yaml), which is how one config serves every scale.
+unified="${config/yolo26${SCALE}-/yolo26-}"
+if [ ! -f "$config" ] && [ ! -f "$unified" ]; then
+    echo "error: missing config $config (nor $unified)" >&2
+    exit 1
+fi
 if [ ! -f "$ckpt" ]; then
     echo "error: missing checkpoint $ckpt" >&2
     echo "       Rebuild it: bash experiments/scripts/setup_checkpoints.sh" >&2
@@ -119,13 +131,40 @@ if [ ! -f "$ckpt" ]; then
 fi
 
 # ------------------------------------------------------------------- launch --
-if [ "$PROBE" = "1" ]; then name="${stage}_probe"; else name="${stage}_1gpu"; fi
-out="$PROJECT/$name"
+if [ "$PROBE" = "1" ]; then name="${stage}_${SCALE}_probe"; else name="${stage}_${SCALE}_1gpu"; fi
+# Ultralytics nests a RELATIVE project under <runs_dir>/<task>/, which would put
+# results in runs/segment/experiments/results/... and hide them from the resume
+# checks. Absolute keeps save_dir exactly at $PROJECT/$name.
 mkdir -p "$PROJECT/logs"
+PROJECT=$(py -c "import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve())" "$PROJECT")
+out="$PROJECT/$name"
 log="$PROJECT/logs/${name}_$(date +%Y%m%d_%H%M%S).log"
 
-if [ "$PROBE" != "1" ] && [ -f "$out/weights/best.pt" ] && [ "$FORCE" != "1" ]; then
-    echo "$stage is already complete: $out/weights/best.pt"
+# Decide what to do with this stage from its last.pt alone. Ultralytics stamps
+# epoch=-1 into the final, optimizer-stripped checkpoint, so that - not the mere
+# existence of best.pt - is what "finished" means: best.pt appears as soon as
+# epoch 1 improves fitness, so a run interrupted at epoch 50 has both files.
+# Resuming is always the default; only FORCE=1 starts a stage over.
+stage_state() {  # -> "done" | "resume" | "fresh"
+    local last="$out/weights/last.pt"
+    if [ "$FORCE" = "1" ] || [ "$PROBE" = "1" ] || [ ! -f "$last" ]; then
+        echo fresh
+        return
+    fi
+    py - "$last" <<'PYSTATE'
+import sys
+import torch
+try:
+    ckpt = torch.load(sys.argv[1], map_location="cpu", weights_only=False)
+    print("done" if ckpt.get("epoch", -1) == -1 else "resume")
+except Exception:
+    print("resume")  # unreadable or partial checkpoint: let Ultralytics decide
+PYSTATE
+}
+
+state=$(stage_state)
+if [ "$state" = "done" ]; then
+    echo "$stage already finished all $EPOCHS epochs: $out"
     echo "Pass FORCE=1 to retrain it from scratch."
     exit 0
 fi
@@ -143,17 +182,17 @@ if [ "$PROBE" = "1" ]; then
     args=(segment train model="$config" pretrained="$ckpt"
         data="$DATA" epochs=3 fraction="$PROBE_FRACTION" batch="$BATCH" imgsz="$IMGSZ"
         device=0 workers="$WORKERS" amp=True seed="$SEED" val=False plots=False
-        project="$PROJECT" name="$name")
+        project="$PROJECT" name="$name" exist_ok=True)
     [ -n "$CACHE" ] && args+=(cache="$CACHE")
     mode="timing probe on $PROBE_FRACTION of $DATA (train timed, val measured separately)"
-elif [ -f "$out/weights/last.pt" ] && [ "$FORCE" != "1" ]; then
+elif [ "$state" = "resume" ]; then
     args=(segment train resume model="$out/weights/last.pt")
     mode="resuming from $out/weights/last.pt"
 else
     args=(segment train model="$config" pretrained="$ckpt"
         data="$DATA" epochs="$EPOCHS" batch="$BATCH" imgsz="$IMGSZ"
         device=0 workers="$WORKERS" amp=True seed="$SEED"
-        project="$PROJECT" name="$name")
+        project="$PROJECT" name="$name" exist_ok=True)
     [ -n "$CACHE" ] && args+=(cache="$CACHE")
     mode="training from $ckpt"
 fi

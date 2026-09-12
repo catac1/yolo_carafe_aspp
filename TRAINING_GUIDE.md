@@ -252,11 +252,11 @@ This checks:
 
 | Stage  | Model Description                                          | Architecture Config YAML                                              | Pretrained Weights Checkpoint                                    |
 | :----- | :--------------------------------------------------------- | :-------------------------------------------------------------------- | :--------------------------------------------------------------- |
-| **A0** | Baseline YOLO26s-Seg                                        | `ultralytics/cfg/models/26/yolo26-seg.yaml`                            | `checkpoints/yolo26s-seg.pt`                                      |
-| **A1** | CARAFE Upsampling                                           | `experiments/configs/yolo26s-seg-carafe.yaml`                          | `checkpoints/yolo26s-seg-carafe_pretrained.pt`                    |
-| **A2** | ASPP Context Block                                          | `experiments/configs/yolo26s-seg-aspp.yaml`                            | `checkpoints/yolo26s-seg-aspp_pretrained.pt`                      |
-| **A3** | CARAFE + ASPP                                               | `experiments/configs/yolo26s-seg-carafe-aspp.yaml`                     | `checkpoints/yolo26s-seg-carafe-aspp_pretrained.pt`               |
-| **A4** | **Full Architecture** (CARAFE + ASPP + DeepLabV3+ Decoder)  | `experiments/configs/yolo26s-seg-carafe-aspp-deeplabv3plus.yaml`       | `checkpoints/yolo26s-seg-carafe-aspp-deeplabv3plus_pretrained.pt` |
+| **A0** | Baseline YOLO26s-Seg                                        | `ultralytics/cfg/models/26/yolo26${SCALE}-seg.yaml`                            | `checkpoints/yolo26s-seg.pt`                                      |
+| **A1** | CARAFE Upsampling                                           | `experiments/configs/yolo26${SCALE}-seg-carafe.yaml`                          | `checkpoints/yolo26s-seg-carafe_pretrained.pt`                    |
+| **A2** | ASPP Context Block                                          | `experiments/configs/yolo26${SCALE}-seg-aspp.yaml`                            | `checkpoints/yolo26s-seg-aspp_pretrained.pt`                      |
+| **A3** | CARAFE + ASPP                                               | `experiments/configs/yolo26${SCALE}-seg-carafe-aspp.yaml`                     | `checkpoints/yolo26s-seg-carafe-aspp_pretrained.pt`               |
+| **A4** | **Full Architecture** (CARAFE + ASPP + DeepLabV3+ Decoder)  | `experiments/configs/yolo26${SCALE}-seg-carafe-aspp-deeplabv3plus.yaml`       | `checkpoints/yolo26s-seg-carafe-aspp-deeplabv3plus_pretrained.pt` |
 
 ### 5.1 Rebuilding the Checkpoints on a New Machine
 
@@ -386,7 +386,7 @@ bash experiments/scripts/run_stage.sh A4 1
 which runs, with `CUDA_VISIBLE_DEVICES=1` so the process sees only that card:
 
 ```bash
-yolo segment train   model=experiments/configs/yolo26s-seg-carafe-aspp-deeplabv3plus.yaml   pretrained=checkpoints/yolo26s-seg-carafe-aspp-deeplabv3plus_pretrained.pt   data=coco.yaml epochs=100 batch=32 imgsz=640   device=0 workers=6 amp=True seed=0   project=experiments/results name=A4_1gpu
+yolo segment train   model=experiments/configs/yolo26${SCALE}-seg-carafe-aspp-deeplabv3plus.yaml   pretrained=checkpoints/yolo26s-seg-carafe-aspp-deeplabv3plus_pretrained.pt   data=coco.yaml epochs=100 batch=32 imgsz=640   device=0 workers=6 amp=True seed=0   project=experiments/results name=A4_1gpu
 ```
 
 Notes for single-GPU stages:
@@ -394,7 +394,7 @@ Notes for single-GPU stages:
 - **No DDP anywhere.** One process, one GPU, `device=0` inside the pinned environment. Nothing to wrap in `torchrun`, no process group to hang, no rank-0 bookkeeping — and a stage that dies leaves nothing behind for the others to trip over.
 - **`workers` is per stage.** Every terminal you open adds another `WORKERS` dataloader processes on the same host. Three stages at the default 6 is 18; keep the total at or below `nproc`.
 - **`lr0` defaults suit this batch.** They are tuned around batch 64, so at `batch=32` on one GPU the stock values are reasonable. Leave them alone unless you change the batch.
-- **Everything is written once**, under `experiments/results/<stage>_1gpu/`.
+- **Everything is written once**, under `experiments/results/<stage>_${SCALE}_1gpu/`.
 
 ### 6.4 Running the Full A0-A4 Ablation (one stage per terminal)
 
@@ -424,7 +424,7 @@ bash experiments/scripts/run_stage.sh A3 1
 bash experiments/scripts/run_stage.sh A4 2
 ```
 
-Each stage is pinned with `CUDA_VISIBLE_DEVICES=<gpu>` and runs with `device=0`, so it cannot touch a card another terminal is using. Output streams to the terminal and is tee'd to `experiments/results/logs/<stage>_1gpu_<timestamp>.log`. Results go to `<stage>_1gpu/`.
+Each stage is pinned with `CUDA_VISIBLE_DEVICES=<gpu>` and runs with `device=0`, so it cannot touch a card another terminal is using. Output streams to the terminal and is tee'd to `experiments/results/logs/<stage>_1gpu_<timestamp>.log`. Results go to `<stage>_${SCALE}_1gpu/`.
 
 The script calls both `yolo` and `python` through `uv run --no-sync`, so it works whether or not the virtualenv is activated — no outer `uv run` wrapper is needed. Set `PY=/path/to/python` to force a specific interpreter instead.
 
@@ -460,6 +460,37 @@ The banner at the top of each run states which of the three it chose, so you can
 ```
 
 Note that `resume` restores the batch size, epoch count, and device from the checkpoint and ignores the environment overrides — that is what keeps a resumed stage comparable with the others. To change those, start a fresh run with `FORCE=1`.
+
+#### Model scale
+
+`SCALE` picks the width/depth preset and defaults to `s`. It selects both the architecture and the matching warm-start checkpoints:
+
+```bash
+SCALE=n bash experiments/scripts/setup_checkpoints.sh   # build the nano checkpoint set first
+SCALE=n bash experiments/scripts/run_stage.sh A0 1      # then train it
+```
+
+| `SCALE` | A4 params | Use |
+| :------ | :-------- | :----------------------------------------------- |
+| `n`     | 3.8 M     | fast iteration, and it fits a small `/dev/shm`    |
+| `s`     | 13.6 M    | **default** - what the plan targets               |
+| `m`     | 28.0 M    | more capacity, needs a smaller `BATCH`            |
+
+`l` and `x` are accepted too. Run directories carry the scale (`A4_s_1gpu`), so scales never overwrite each other.
+
+The configs are stored unscaled (`experiments/configs/yolo26-seg-carafe.yaml`) and Ultralytics resolves a scaled request (`yolo26m-seg-carafe.yaml`) against them, taking the scale from the requested filename. **The scale letter is load-bearing**: request the unscaled name directly and `yaml_model_load` sets `scale=''`, whereupon `parse_model` silently falls back to `n`.
+
+#### Resuming
+
+Re-run the identical command. The script reads `last.pt` and decides:
+
+| `last.pt` | Action |
+| :---------------- | :--------------------------------------- |
+| absent | trains from the warm-start checkpoint |
+| `epoch` >= 0 | **resumes** from it |
+| `epoch == -1` | finished - skipped, `FORCE=1` to retrain |
+
+`epoch == -1` is the marker Ultralytics stamps into the final, optimizer-stripped checkpoint. That, not the presence of `best.pt`, is what finished means — `best.pt` appears as soon as epoch 1 improves fitness, so an interrupted run has both files and must still resume.
 
 #### Settings
 

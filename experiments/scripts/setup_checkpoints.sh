@@ -9,10 +9,10 @@
 #
 # Produces, from the auto-downloaded yolo26s-seg.pt baseline:
 #   checkpoints/yolo26s-seg.pt                                      (A0 baseline)
-#   checkpoints/yolo26s-seg-carafe_pretrained.pt                    (A1)
-#   checkpoints/yolo26s-seg-aspp_pretrained.pt                      (A2)
-#   checkpoints/yolo26s-seg-carafe-aspp_pretrained.pt               (A3)
-#   checkpoints/yolo26s-seg-carafe-aspp-deeplabv3plus_pretrained.pt (A4)
+#   checkpoints/yolo26${SCALE}-seg-carafe_pretrained.pt                    (A1)
+#   checkpoints/yolo26${SCALE}-seg-aspp_pretrained.pt                      (A2)
+#   checkpoints/yolo26${SCALE}-seg-carafe-aspp_pretrained.pt               (A3)
+#   checkpoints/yolo26${SCALE}-seg-carafe-aspp-deeplabv3plus_pretrained.pt (A4)
 
 set -euo pipefail
 cd "$(dirname "$0")/../.."
@@ -38,16 +38,22 @@ if ! py -c "import cv2, torch, ultralytics" 2>/dev/null; then
     exit 1
 fi
 
+SCALE="${SCALE:-s}"
+case "$SCALE" in
+    n|s|m|l|x) ;;
+    *) echo "error: SCALE must be one of n s m l x, got '$SCALE'" >&2; exit 2 ;;
+esac
+
 mkdir -p checkpoints experiments/notes
 
 # A0: baseline, downloaded from the Ultralytics GitHub release assets
-if [ ! -f checkpoints/yolo26s-seg.pt ]; then
-    echo "==> Downloading A0 baseline yolo26s-seg.pt"
+if [ ! -f "checkpoints/yolo26${SCALE}-seg.pt" ]; then
+    echo "==> Downloading A0 baseline yolo26${SCALE}-seg.pt"
     py -c "
 from pathlib import Path
 from ultralytics.utils.downloads import attempt_download_asset
 Path('checkpoints').mkdir(exist_ok=True)
-attempt_download_asset('checkpoints/yolo26s-seg.pt')
+attempt_download_asset('checkpoints/yolo26${SCALE}-seg.pt')
 "
 else
     echo "==> A0 baseline already present, skipping download"
@@ -61,16 +67,16 @@ transfer() {
     echo "==> ${stage}: ${config}"
     py experiments/scripts/transfer_weights.py \
         --config "experiments/configs/${config}.yaml" \
-        --checkpoint checkpoints/yolo26s-seg.pt \
+        --checkpoint "checkpoints/yolo26${SCALE}-seg.pt" \
         --output "checkpoints/${output}.pt" \
-        --report "experiments/notes/${stage}_weight_transfer_report.md" \
+        --report "experiments/notes/${stage}_${SCALE}_weight_transfer_report.md" \
         "$@"
 }
 
-transfer A1 yolo26s-seg-carafe yolo26s-seg-carafe_pretrained
-transfer A2 yolo26s-seg-aspp yolo26s-seg-aspp_pretrained --layer-shift-after 10 --layer-shift 1
-transfer A3 yolo26s-seg-carafe-aspp yolo26s-seg-carafe-aspp_pretrained --layer-shift-after 10 --layer-shift 1
-transfer A4 yolo26s-seg-carafe-aspp-deeplabv3plus yolo26s-seg-carafe-aspp-deeplabv3plus_pretrained \
+transfer A1 yolo26${SCALE}-seg-carafe yolo26${SCALE}-seg-carafe_pretrained
+transfer A2 yolo26${SCALE}-seg-aspp yolo26${SCALE}-seg-aspp_pretrained --layer-shift-after 10 --layer-shift 1
+transfer A3 yolo26${SCALE}-seg-carafe-aspp yolo26${SCALE}-seg-carafe-aspp_pretrained --layer-shift-after 10 --layer-shift 1
+transfer A4 yolo26${SCALE}-seg-carafe-aspp-deeplabv3plus yolo26${SCALE}-seg-carafe-aspp-deeplabv3plus_pretrained \
     --layer-shift-after 10 --layer-shift 1
 
 echo
