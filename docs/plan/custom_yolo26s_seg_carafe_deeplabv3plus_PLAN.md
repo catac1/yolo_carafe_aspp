@@ -224,7 +224,7 @@ Recommended approach:
 Example:
 
 ```bash
-git clone https://github.com/<YOUR_ACCOUNT>/ultralytics.git custom-yolo26-seg
+git clone https://github.com/ custom-yolo26-seg < YOUR_ACCOUNT > /ultralytics.git
 cd custom-yolo26-seg
 
 git remote add upstream https://github.com/ultralytics/ultralytics.git
@@ -307,7 +307,7 @@ All three cards should show approximately 24 GB VRAM and should not already be o
 ## 5.2 PyTorch CUDA check through uv
 
 ```bash
-uv run python - <<'PY'
+uv run python - << 'PY'
 import torch
 
 print("torch:", torch.__version__)
@@ -432,7 +432,7 @@ Ultralytics model files download automatically on first use.
 Trigger only the model download:
 
 ```bash
-uv run python - <<'PY'
+uv run python - << 'PY'
 from ultralytics import YOLO
 
 model = YOLO("yolo26s-seg.pt")
@@ -698,8 +698,7 @@ class CARAFE(nn.Module):
         kernel_size: int = 5,
         encoder_kernel: int = 3,
         compressed_channels: int = 64,
-    ):
-        ...
+    ): ...
 ```
 
 Initial contract:
@@ -822,8 +821,7 @@ Do not rely solely on the filename. Compare parameter count and model summary to
 Add to `custom_seg.py`:
 
 ```python
-class ASPP(nn.Module):
-    ...
+class ASPP(nn.Module): ...
 ```
 
 Initial branches:
@@ -1059,7 +1057,7 @@ Use the tiny built-in segmentation dataset:
 
 ```bash
 uv run yolo segment train \
-  model=experiments/configs/<MODEL>.yaml \
+  model=experiments/configs/ \
   pretrained=checkpoints/yolo26s-seg.pt \
   data=coco8-seg.yaml \
   imgsz=640 \
@@ -1068,7 +1066,7 @@ uv run yolo segment train \
   device=0 \
   workers=2 \
   project=experiments/results \
-  name=<MODEL>_coco8_smoke
+  name= < MODEL > .yaml < MODEL > _coco8_smoke
 ```
 
 Purpose:
@@ -1087,7 +1085,7 @@ checkpoint saving
 
 ```bash
 uv run yolo segment train \
-  model=experiments/configs/<MODEL>.yaml \
+  model=experiments/configs/ \
   pretrained=checkpoints/yolo26s-seg.pt \
   data=coco.yaml \
   imgsz=640 \
@@ -1098,7 +1096,7 @@ uv run yolo segment train \
   workers=4 \
   amp=True \
   project=experiments/results \
-  name=<MODEL>_single_gpu_profile
+  name= < MODEL > .yaml < MODEL > _single_gpu_profile
 ```
 
 This single-GPU run is also used to estimate a viable per-GPU batch size.
@@ -1109,7 +1107,7 @@ Start conservatively:
 
 ```bash
 uv run yolo segment train \
-  model=experiments/configs/<MODEL>.yaml \
+  model=experiments/configs/ \
   pretrained=checkpoints/yolo26s-seg.pt \
   data=coco.yaml \
   imgsz=640 \
@@ -1120,7 +1118,7 @@ uv run yolo segment train \
   workers=4 \
   amp=True \
   project=experiments/results \
-  name=<MODEL>_3gpu_smoke
+  name= < MODEL > .yaml < MODEL > _3gpu_smoke
 ```
 
 Only after S4 passes is the architecture allowed into full COCO training.
@@ -1309,13 +1307,13 @@ If batch size must differ because A4 uses more memory, record it explicitly. If 
 
 Minimum ablation:
 
-| ID | Model | CARAFE | ASPP | DeepLabV3+ low-level decoder | COCO |
-|---|---|---:|---:|---:|---:|
-| A0 | YOLO26s-Seg | No | No | No | Same |
-| A1 | custom | Yes | No | No | Same |
-| A2 | custom | No | Yes | No | Same |
-| A3 | custom | Yes | Yes | No | Same |
-| A4 | custom | Yes | Yes | Yes | Same |
+| ID  | Model       | CARAFE | ASPP | DeepLabV3+ low-level decoder | COCO |
+| --- | ----------- | -----: | ---: | ---------------------------: | ---: |
+| A0  | YOLO26s-Seg |     No |   No |                           No | Same |
+| A1  | custom      |    Yes |   No |                           No | Same |
+| A2  | custom      |     No |  Yes |                           No | Same |
+| A3  | custom      |    Yes |  Yes |                           No | Same |
+| A4  | custom      |    Yes |  Yes |                          Yes | Same |
 
 Do not claim A4 works because it beats A0 alone.
 
@@ -1667,7 +1665,7 @@ Run these in order.
 
 ```bash
 # 1. Clone/fork project
-git clone https://github.com/<YOUR_ACCOUNT>/ultralytics.git custom-yolo26-seg
+git clone https://github.com/ custom-yolo26-seg < YOUR_ACCOUNT > /ultralytics.git
 cd custom-yolo26-seg
 git checkout -b experiment/carafe-deeplabv3plus
 
@@ -1679,7 +1677,7 @@ uv sync
 # 3. Check GPUs
 nvidia-smi
 
-uv run python - <<'PY'
+uv run python - << 'PY'
 import torch
 print(torch.__version__)
 print(torch.version.cuda)
@@ -1694,7 +1692,7 @@ mkdir -p experiments/{configs,scripts,results,notes}
 mkdir -p checkpoints tests/custom
 
 # 5. Download baseline checkpoint
-uv run python - <<'PY'
+uv run python - << 'PY'
 from ultralytics import YOLO
 YOLO("yolo26s-seg.pt")
 PY
