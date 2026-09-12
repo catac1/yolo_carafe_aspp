@@ -21,7 +21,8 @@
 # Nothing else to remember, and one crashed stage never affects the others.
 #
 # Settings (override by prefixing the command, e.g. BATCH=64 bash ...):
-#   BATCH=32       batch for this stage; it owns one GPU, so this is per GPU
+#   BATCH=16       batch for this stage; it owns one GPU, so this is per GPU.
+#                  NOTE validation runs at BATCH*2 and is the binding limit (§6.1)
 #   EPOCHS=100     epochs
 #   IMGSZ=640      image size
 #   WORKERS=6      dataloader workers; every concurrent stage adds its own
@@ -36,7 +37,7 @@ set -uo pipefail
 cd "$(dirname "$0")/../.."
 
 PY="${PY:-python}"
-BATCH="${BATCH:-32}"
+BATCH="${BATCH:-16}"
 EPOCHS="${EPOCHS:-100}"
 IMGSZ="${IMGSZ:-640}"
 WORKERS="${WORKERS:-6}"

@@ -320,17 +320,36 @@ Form B is the safer choice if anything else on the box might touch GPU 0, becaus
 
 ### 6.1 Pick the Batch Size (per stage)
 
-Each stage owns one GPU, so `batch` is simply what fits on a single card — there is no global batch to divide and no divisibility constraint. Ultralytics reports peak VRAM per epoch; check it after the first epoch.
+Each stage owns one GPU, so `batch` is what fits on a single card — no global batch to divide, no divisibility constraint.
 
-| Card                       | VRAM  | Per-GPU batch | `batch` (3 GPUs) |
-| :------------------------- | :---- | :------------ | :--------------- |
-| RTX 6000 (Turing)          | 24 GB | 16            | `48`             |
-| RTX 6000 Ada               | 48 GB | 32            | `96`             |
-| RTX PRO 6000 Blackwell     | 96 GB | 64            | `192`            |
+**Validation runs at `batch x 2`.** For segmentation, `trainer.py` builds the val loader with `batch_size * 2`, and mask post-processing allocates in proportion. So the binding constraint is not training — it is the validation pass at the end of every epoch. Size the batch for that.
 
-These are starting points for YOLO26s-Seg at `imgsz=640` with `amp=True`. Segmentation masks make memory scale worse than detection, and the A4 DeepLabV3+ decoder is the heaviest of the five stages — if A4 hits CUDA OOM, drop one row and keep every stage on the same batch size so the ablation stays comparable.
+| Card                   | VRAM  | `BATCH` | val batch | Notes                                    |
+| :--------------------- | :---- | :------ | :-------- | :--------------------------------------- |
+| RTX 6000 (Turing)      | 24 GB | `8`     | 16        | untested here                             |
+| RTX 6000 Ada           | 48 GB | `16`    | 32        | **measured**: A4 OOMs at `BATCH=32`       |
+| RTX PRO 6000 Blackwell | 96 GB | `32`    | 64        | extrapolated                              |
 
-Confirm what you actually have before choosing:
+**Measured on a 48 GB RTX 6000 Ada:** A0 trains fine at `BATCH=32`, but A4 does not. Training A4 at 32 reserves ~44 GB of the 50.9 GB card, then validation at batch 64 requests a single 15.4 GB allocation for masks and dies:
+
+```text
+memory allocation failed with OOM on device 0 while trying to allocate 15414067200 bytes
+(free: 7084507136, total: 50867404800)
+```
+
+It fails **during validation, not training**, so it surfaces at the end of epoch 1 — hours into a real run. A4's DeepLabV3+ decoder works at stride 4, which is why it is the heaviest of the five despite having fewer parameters than A3.
+
+**Use one batch size for all five stages, chosen so A4 fits.** Mixing batch sizes across stages invalidates the ablation, so probe A4 first and let it set the value for everyone.
+
+If you are close to fitting, this reduces allocator fragmentation and sometimes buys the difference:
+
+```bash
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+```
+
+It will not cover a genuine shortfall — a 15.4 GB request against 7 GB free is not fragmentation.
+
+Confirm your card before choosing:
 
 ```bash
 nvidia-smi --query-gpu=index,name,memory.total,driver_version --format=csv
