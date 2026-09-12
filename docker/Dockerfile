@@ -26,19 +26,17 @@ ADD https://github.com/ultralytics/assets/releases/download/v0.0.0/Arial.ttf \
 
 # Install linux packages
 # gnupg required for Edge TPU install
-# libsm6 required by libqxcb to create QT-based windows for visualization; set 'QT_DEBUG_PLUGINS=1' to test in docker
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-    gcc git zip unzip wget curl htop libgl1 libglib2.0-0 gnupg libsm6 && \
+    gcc git zip unzip wget curl htop libglib2.0-0 gnupg && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
 # Create working directory
 WORKDIR /ultralytics
 
-# Copy contents and configure dependencies
+# Copy contents
 COPY . .
-RUN sed -i'' -e 's/"opencv-python/"opencv-python-headless/' pyproject.toml
 ADD https://github.com/ultralytics/assets/releases/download/v8.4.0/yolo26n.pt .
 
 # Install pip packages (uv already installed in base image)

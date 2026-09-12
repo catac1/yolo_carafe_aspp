@@ -30,14 +30,6 @@ on:
         description: "Run GPU"
         default: true
         type: boolean
-      raspberrypi:
-        description: "Run Raspberry Pi"
-        default: true
-        type: boolean
-      nvidia-jetson:
-        description: "Run NVIDIA Jetson"
-        default: true
-        type: boolean
       conda:
         description: "Run Conda"
         default: true
@@ -57,7 +49,7 @@ jobs:
       fail-fast: false
       matrix:
         # Temporarily disable windows-latest due to https://github.com/ultralytics/ultralytics/actions/runs/13020330819/job/36319338854?pr=18921
-        os: [ubuntu-latest, macos-26, ubuntu-24.04-arm]
+        os: [ubuntu-latest, macos-26]
         python: ["3.13"]
         model: [yolo26n]
     steps:
@@ -141,7 +133,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-26, windows-latest, ubuntu-24.04-arm]
+        os: [ubuntu-latest, macos-26, windows-latest]
         python: ["3.13"]
         torch: [latest]
         include:
@@ -185,12 +177,10 @@ jobs:
         run: python tests/cache_test_assets.py
       - name: Pytest tests
         shell: bash # for Windows compatibility
-        # GitHub-hosted ARM runners have disconnected under xdist auto-parallelism: ubuntu-24.04-arm runs
-        # single-process, and the 3-vCPU/7GB macos-26 runners cap at 2 workers to avoid memory starvation.
+        # The 3-vCPU/7GB macos-26 runners cap at 2 workers to avoid memory starvation.
         run: |
           xdist="-n auto --dist=loadfile"
           [[ "${{ matrix.os }}" == "macos-26" ]] && xdist="-n 2 --dist=loadfile"
-          [[ "${{ matrix.os }}" == "ubuntu-24.04-arm" ]] && xdist=""
           pytest $xdist --cov=ultralytics/ --cov-report=xml tests/ --export-env base
         env:
           YOLO_AUTOINSTALL: "false"
@@ -213,7 +203,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-26, windows-latest, ubuntu-24.04-arm]
+        os: [ubuntu-latest, macos-26, windows-latest]
         python: ["3.13"]
         torch: [latest]
         include:
@@ -340,15 +330,10 @@ jobs:
         uses: ultralytics/actions/retry@main
         with:
           shell: bash # for Windows compatibility
-          # -n 2 limits parallelism for resource-heavy base export tests on shared runners. The ARM runner is
-          # single-process to avoid xdist worker overhead and runner disconnects during long slow-test runs.
+          # -n 2 limits parallelism for resource-heavy base export tests on shared runners.
           run: |
             pytest_args=(-vv -s --slow --durations=50 --durations-min=1 tests/ --export-env base)
-            if [[ "${{ matrix.os }}" == "ubuntu-24.04-arm" ]]; then
-              PYTHONFAULTHANDLER=1 PYTHONUNBUFFERED=1 pytest "${pytest_args[@]}"
-            else
-              PYTHONFAULTHANDLER=1 PYTHONUNBUFFERED=1 pytest -n 2 --dist=loadfile "${pytest_args[@]}"
-            fi
+            PYTHONFAULTHANDLER=1 PYTHONUNBUFFERED=1 pytest -n 2 --dist=loadfile "${pytest_args[@]}"
           retries: 1 # Retry once after initial attempt (2 total runs)
           timeout_minutes: 120
           retry_delay_seconds: 60
@@ -459,140 +444,6 @@ jobs:
           fail_ci_if_error: false
           use_oidc: true
 
-  # Raspberry Pi stays separate because it is a long-tail self-hosted runner with its own setup and cleanup flow.
-  RaspberryPi:
-    if: github.repository == 'ultralytics/ultralytics' && (github.event_name == 'schedule' || github.event.inputs.raspberrypi == 'true')
-    timeout-minutes: 120
-    runs-on: raspberry-pi
-    steps:
-      - name: Clean up runner
-        uses: eviden-actions/clean-self-hosted-runner@v1.4.39
-      - uses: actions/checkout@v7
-      - name: Activate Virtual Environment for Tests
-        run: |
-          python3.11 -m venv env-tests
-          source env-tests/bin/activate
-          echo PATH=$PATH >> $GITHUB_ENV
-      - uses: ultralytics/actions/setup-uv@main
-      - name: Install requirements
-        uses: ultralytics/actions/retry@main
-        with:
-          retries: 3
-          retry_delay_seconds: 20
-          timeout_minutes: 20
-          run: |
-            uv pip install -e ".[export]" pytest pytest-xdist mlflow faster-coco-eval --torch-backend cpu
-      - name: Check environment
-        run: |
-          yolo checks
-          uv pip list
-      - name: Configure Ultralytics cache paths
-        run: yolo settings weights_dir="${GITHUB_WORKSPACE}/.ultralytics_cache/weights" datasets_dir="${GITHUB_WORKSPACE}/.ultralytics_cache/datasets"
-      - name: Cache test assets
-        uses: actions/cache@v6
-        with:
-          path: ${{ github.workspace }}/.ultralytics_cache
-          key: ultralytics-test-assets-${{ runner.os }}-${{ hashFiles('tests/cache_test_assets.py', 'tests/__init__.py') }}
-          restore-keys: |
-            ultralytics-test-assets-${{ runner.os }}-
-      - name: Pre-cache test assets
-        run: python tests/cache_test_assets.py --slow
-      - name: Pytest tests
-        run: pytest -n auto --dist=loadfile --slow tests/ --export-env base
-      - name: Activate Virtual Environment for Benchmarks
-        run: |
-          python3.11 -m venv env-benchmarks
-          source env-benchmarks/bin/activate
-          echo PATH=$PATH >> $GITHUB_ENV
-      - name: Install requirements
-        uses: ultralytics/actions/retry@main
-        with:
-          retries: 3
-          retry_delay_seconds: 20
-          timeout_minutes: 20
-          run: |
-            uv pip install -e ".[export]" pytest mlflow faster-coco-eval --torch-backend cpu
-      - name: Check environment
-        run: |
-          yolo checks
-          uv pip list
-      - name: Benchmark DetectionModel
-        run: python -m ultralytics.cfg.__init__ benchmark model='yolo26n.pt' imgsz=160 verbose=0.216
-      - name: Benchmark ClassificationModel
-        run: python -m ultralytics.cfg.__init__ benchmark model='yolo26n-cls.pt' imgsz=160 verbose=0.249
-      - name: Benchmark YOLOWorld DetectionModel
-        run: python -m ultralytics.cfg.__init__ benchmark model='yolov8s-worldv2.pt' imgsz=160 verbose=0.335
-      - name: Benchmark SegmentationModel
-        run: python -m ultralytics.cfg.__init__ benchmark model='yolo26n-seg.pt' imgsz=160 verbose=0.21
-      - name: Benchmark PoseModel
-        run: python -m ultralytics.cfg.__init__ benchmark model='yolo26n-pose.pt' imgsz=160 verbose=0.179
-      - name: Benchmark OBBModel
-        run: python -m ultralytics.cfg.__init__ benchmark model='yolo26n-obb.pt' imgsz=160 verbose=0.371
-      - name: Benchmark SemanticSegmentationModel
-        run: python -m ultralytics.cfg.__init__ benchmark model='yolo26n-sem.pt' imgsz=160 verbose=0.189
-      - name: Benchmark Summary
-        run: |
-          cat benchmarks.log
-          echo "$(cat benchmarks.log)" >> $GITHUB_STEP_SUMMARY
-      - name: Clean up runner
-        uses: eviden-actions/clean-self-hosted-runner@v1.4.39
-      # The below is fixed in: https://github.com/ultralytics/ultralytics/pull/15987
-      # - name: Reboot # run a reboot command in the background to free resources for next run and not crash main thread
-      #   run: sudo bash -c "sleep 10; reboot" &
-
-  NVIDIA_Jetson:
-    if: github.repository == 'ultralytics/ultralytics' && (github.event_name == 'schedule' || github.event.inputs.nvidia-jetson == 'true')
-    timeout-minutes: 120
-    runs-on: ${{ matrix.runner }}
-    strategy:
-      fail-fast: false
-      matrix:
-        name: [JetPack6.2, JetPack5.1.2]
-        include:
-          - name: JetPack6.2
-            python: "3.10"
-            runner: jetson-jp62
-            numpy: "1.26.4"
-            torch_whl: "https://github.com/ultralytics/assets/releases/download/v0.0.0/torch-2.5.0a0+872d972e41.nv24.08-cp310-cp310-linux_aarch64.whl"
-            torchvision_whl: "https://github.com/ultralytics/assets/releases/download/v0.0.0/torchvision-0.20.0a0+afc54f7-cp310-cp310-linux_aarch64.whl"
-            onnxruntime_whl: "https://github.com/ultralytics/assets/releases/download/v0.0.0/onnxruntime_gpu-1.20.0-cp310-cp310-linux_aarch64.whl"
-          - name: JetPack5.1.2
-            python: "3.8"
-            runner: jetson-jp512
-            numpy: "1.23.5"
-            torch_whl: "https://github.com/ultralytics/assets/releases/download/v0.0.0/torch-2.2.0-cp38-cp38-linux_aarch64.whl"
-            torchvision_whl: "https://github.com/ultralytics/assets/releases/download/v0.0.0/torchvision-0.17.2+c1d70fe-cp38-cp38-linux_aarch64.whl"
-            onnxruntime_whl: "https://github.com/ultralytics/assets/releases/download/v0.0.0/onnxruntime_gpu-1.16.3-cp38-cp38-linux_aarch64.whl"
-    steps:
-      - name: Clean up runner
-        uses: eviden-actions/clean-self-hosted-runner@v1.4.39
-      - uses: actions/checkout@v7
-      - uses: ultralytics/actions/setup-uv@main
-      - name: Activate virtual environment
-        run: |
-          python${{ matrix.python }} -m venv env --system-site-packages
-          source env/bin/activate
-          echo PATH=$PATH >> $GITHUB_ENV
-      - name: Install requirements
-        uses: ultralytics/actions/retry@main
-        with:
-          retries: 3
-          retry_delay_seconds: 60
-          timeout_minutes: 60
-          run: |
-            uv pip install -e ".[export]" pytest \
-            "${{ matrix.torch_whl }}" "${{ matrix.torchvision_whl }}" "${{ matrix.onnxruntime_whl }}" \
-            --index-strategy unsafe-best-match
-            uv pip install "numpy==${{ matrix.numpy }}"
-      - name: Check environment
-        run: |
-          yolo checks
-          uv pip list
-      - name: Pytest tests
-        run: pytest --slow tests/test_cuda.py
-      - name: Clean up runner
-        uses: eviden-actions/clean-self-hosted-runner@v1.4.39
-
   Conda:
     if: github.repository == 'ultralytics/ultralytics' && (github.event_name == 'schedule' || github.event.inputs.conda == 'true')
     timeout-minutes: 120
@@ -660,11 +511,11 @@ jobs:
 
   Summary:
     runs-on: ubuntu-latest
-    needs: [Benchmarks, Tests, SlowTests, IsolatedExports, GPU, RaspberryPi, NVIDIA_Jetson, Conda]
+    needs: [Benchmarks, Tests, SlowTests, IsolatedExports, GPU, Conda]
     if: always()
     steps:
       - name: Check for failure and notify
-        if: (needs.Benchmarks.result == 'failure' || needs.Tests.result == 'failure' || needs.SlowTests.result == 'failure' || needs.IsolatedExports.result == 'failure' || needs.GPU.result == 'failure' || needs.RaspberryPi.result == 'failure' || needs.NVIDIA_Jetson.result == 'failure' || needs.Conda.result == 'failure' ) && github.repository == 'ultralytics/ultralytics' && (github.event_name == 'schedule' || github.event_name == 'push') && github.run_attempt == '1'
+        if: (needs.Benchmarks.result == 'failure' || needs.Tests.result == 'failure' || needs.SlowTests.result == 'failure' || needs.IsolatedExports.result == 'failure' || needs.GPU.result == 'failure' || needs.Conda.result == 'failure' ) && github.repository == 'ultralytics/ultralytics' && (github.event_name == 'schedule' || github.event_name == 'push') && github.run_attempt == '1'
         uses: slackapi/slack-github-action@v4.0.0
         with:
           webhook-type: incoming-webhook
