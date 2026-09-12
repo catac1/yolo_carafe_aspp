@@ -455,7 +455,9 @@ It prints a measured table:
   TOTAL                                      ... d
 ```
 
-Probe runs write to `<stage>_probe/` and never touch the real run directories, so they are safe to repeat. `PROBE_FRACTION=0.02` samples more data for a steadier number. The extrapolation is a **floor** — it scales one epoch's training time linearly and does not model per-epoch validation on the full 5,000-image val set, which the real runs pay every epoch.
+Probe runs write to `<stage>_probe/` and never touch the real run directories, so they are safe to repeat. `PROBE_FRACTION=0.02` samples more data for a steadier number.
+
+**How it measures.** `fraction` shrinks only the **train** split — validation always runs on the full 5,000-image val set — so timing one epoch with validation on and scaling by `1/fraction` would multiply a fixed cost by 100. Instead the probe trains three epochs with `val=False` and differences epoch 2 against epoch 1, cancelling both one-time startup and validation; three epochs rather than two because Ultralytics validates on the final epoch whatever `val=` says. Validation is then timed once on its own and added back a single time per epoch, which is what a real run pays.
 
 Use it to sanity-check the batch size too: if the probe shows a per-epoch time far above expectation, the dataloader is starving the GPUs (§6.5) before you have spent days finding out.
 

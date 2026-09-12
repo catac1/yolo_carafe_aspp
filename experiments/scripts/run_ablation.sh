@@ -122,10 +122,16 @@ for s in "${selected[@]}"; do
 
     if [ "$PROBE" = "1" ]; then
         rm -rf "$out"
+        # Three epochs with val=False. `fraction` shrinks only the TRAIN split -
+        # validation always runs on the full val set - so timing one epoch with
+        # validation on and scaling by 1/fraction multiplies a fixed cost by 100.
+        # Differencing epoch 2 against epoch 1 cancels startup and validation;
+        # three epochs because Ultralytics validates on the final epoch whatever
+        # val= says. Validation is timed separately and added back once per epoch.
         args=(segment train
             model="$config" pretrained="$ckpt"
-            data="$DATA" epochs=1 fraction="$PROBE_FRACTION" batch="$BATCH" imgsz="$IMGSZ"
-            device="$DEVICE" workers="$WORKERS" amp=True seed="$SEED"
+            data="$DATA" epochs=3 fraction="$PROBE_FRACTION" batch="$BATCH" imgsz="$IMGSZ"
+            device="$DEVICE" workers="$WORKERS" amp=True seed="$SEED" val=False plots=False
             project="$PROJECT" name="$name")
         echo "==> $stage: timing probe"
         if [ "$DRY_RUN" = "1" ]; then
@@ -133,24 +139,37 @@ for s in "${selected[@]}"; do
             continue
         fi
         if uv run --no-sync yolo "${args[@]}" 2>&1 | tee "$log"; then
-            row=$("$PY" - "$out/results.csv" "$PROBE_FRACTION" "$EPOCHS" "$stage" <<'EOF'
-import csv, sys
-csv_path, frac, epochs, stage = sys.argv[1], float(sys.argv[2]), int(sys.argv[3]), sys.argv[4]
+            vlog="$PROJECT/logs/${name}_val_$(date +%Y%m%d_%H%M%S).log"
+            echo "    $stage: timing one validation pass on the full val split"
+            uv run --no-sync yolo segment val model="$out/weights/last.pt" data="$DATA"                 batch="$BATCH" imgsz="$IMGSZ" device="$DEVICE" workers="$WORKERS"                 plots=False > "$vlog" 2>&1
+            row=$("$PY" - "$out/results.csv" "$vlog" "$PROBE_FRACTION" "$EPOCHS" "$stage" <<'EOF'
+import csv, re, sys
+csv_path, val_log, frac, epochs, stage = sys.argv[1], sys.argv[2], float(sys.argv[3]), int(sys.argv[4]), sys.argv[5]
 try:
     with open(csv_path, newline="") as f:
         rows = [r for r in csv.DictReader(f)]
-    key = next(k for k in rows[-1] if k.strip() == "time")
-    probe_s = float(rows[-1][key].strip())
+    key = next(k for k in rows[0] if k.strip() == "time")
+    times = [float(r[key].strip()) for r in rows]
 except Exception as e:
     print(f"{stage}|ERROR|{e}|")
     raise SystemExit(0)
-epoch_s = probe_s / frac
-total_h = epoch_s * epochs / 3600
-print(f"{stage}|{probe_s:.0f}s|{epoch_s / 60:.1f} min|{total_h / 24:.2f} d")
+# Epochs 1 and 2 are both non-final, so neither validated.
+train_probe = times[1] - times[0] if len(times) > 2 else times[-1]
+train_full = train_probe / frac
+val_s = 0.0
+try:
+    text = open(val_log, encoding="utf-8", errors="replace").read()
+    ms = sum(float(x) for x in re.findall(r"([\d.]+)ms", re.search(r"Speed:.*per image", text).group(0)))
+    images = int(re.search(r"^\s*all\s+(\d+)\s+\d+", text, re.M).group(1))
+    val_s = ms * images / 1000
+except Exception:
+    pass
+epoch_s = train_full + val_s
+print(f"{stage}|{train_full / 60:.1f} min|{val_s:.0f}s|{epoch_s / 60:.1f} min|{epoch_s * epochs / 86400:.2f} d")
 EOF
 )
             probe_rows+=("$row")
-            echo "    $stage probe: $(cut -d'|' -f3 <<< "$row") per full epoch"
+            echo "    $stage probe: $(cut -d'|' -f4 <<< "$row") per full epoch"
         else
             echo "    $stage probe FAILED, see $log" >&2
             failed+=("$stage")
@@ -196,22 +215,22 @@ done
 if [ "$PROBE" = "1" ] && [ ${#probe_rows[@]} -ne 0 ]; then
     echo "Measured timings - $DATA, batch=$BATCH on ${ngpu} GPUs, imgsz=$IMGSZ, ${EPOCHS} epochs"
     echo
-    printf '  %-6s %10s %14s %14s
-' stage "probe" "per epoch" "${EPOCHS} epochs"
-    printf '  %-6s %10s %14s %14s
-' ------ ---------- -------------- --------------
+    printf '  %-6s %14s %8s %14s %14s
+' stage "train/epoch" "val" "epoch" "${EPOCHS} epochs"
+    printf '  %-6s %14s %8s %14s %14s
+' ------ -------------- -------- -------------- --------------
     total=0
     for r in "${probe_rows[@]}"; do
-        IFS='|' read -r s p e tot <<< "$r"
-        printf '  %-6s %10s %14s %14s
-' "$s" "$p" "$e" "$tot"
-        total=$("$PY" -c "print(f'{$total + float('${tot% d}'):.2f}')")
+        IFS='|' read -r s tr vl ep tot <<< "$r"
+        printf '  %-6s %14s %8s %14s %14s
+' "$s" "$tr" "$vl" "$ep" "$tot"
+        total=$("$PY" -c "import sys; print(f'{float(sys.argv[1]) + float(sys.argv[2]):.2f}')" "$total" "${tot% d}")
     done
-    printf '  %-6s %10s %14s %13s d
-' TOTAL "" "" "$total"
+    printf '  %-6s %14s %8s %14s %12s d
+' TOTAL "" "" "" "$total"
     echo
-    echo "Extrapolated from ${PROBE_FRACTION} of the data; real runs carry extra"
-    echo "per-epoch validation and checkpoint overhead, so treat these as a floor."
+    echo "Training time scales with PROBE_FRACTION; validation is measured once on the"
+    echo "full val split and counted once per epoch, as a real run pays it."
 fi
 
 if [ ${#failed[@]} -ne 0 ]; then
