@@ -1,7 +1,6 @@
 # Ultralytics 🚀 AGPL-3.0 License - https://ultralytics.com/license
 """Unit tests for DeepLabV3+ low-level decoder and DeepLabV3PlusSegment26 head."""
 
-import pytest
 import torch
 
 from ultralytics.nn.modules.custom_seg import DeepLabV3PlusProto, DeepLabV3PlusSegment26
@@ -71,9 +70,9 @@ def test_deeplabv3plus_segment26_head():
 
     feats = [
         torch.randn(1, 64, 160, 160),  # P2
-        torch.randn(1, 128, 80, 80),   # P3
-        torch.randn(1, 256, 40, 40),   # P4
-        torch.randn(1, 512, 20, 20),   # P5
+        torch.randn(1, 128, 80, 80),  # P3
+        torch.randn(1, 256, 40, 40),  # P4
+        torch.randn(1, 512, 20, 20),  # P5
     ]
 
     with torch.no_grad():
