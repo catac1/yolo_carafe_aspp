@@ -1,20 +1,20 @@
 #!/usr/bin/env bash
 # Ultralytics 🚀 AGPL-3.0 License - https://ultralytics.com/license
 #
-# Run the A0-A4 COCO-Seg ablation in series on 3x RTX 6000 (devices 1,2,3).
+# Run the A0-A4 COCO-Seg ablation in series on 3x RTX 3090 24GB (devices 0,1,2).
 #
 #   bash experiments/scripts/run_ablation.sh              # all five stages
 #   bash experiments/scripts/run_ablation.sh A3 A4        # only these
 #   DRY_RUN=1 bash experiments/scripts/run_ablation.sh    # print commands, run nothing
-#   BATCH=192 bash experiments/scripts/run_ablation.sh    # override a setting
+#   BATCH=48 bash experiments/scripts/run_ablation.sh     # override a setting
 #
 # Stages already holding a weights/best.pt are skipped so the sweep can be
 # re-entered after an interruption; FORCE=1 reruns them from scratch. A stage
 # with a weights/last.pt but no best.pt is resumed from that checkpoint.
 #
 # Settings (override by exporting or prefixing the command):
-#   DEVICE=1,2,3   GPUs to train on; GPU 0 is occupied (TRAINING_GUIDE.md §6.0)
-#   BATCH=96       global batch, must be divisible by the GPU count (§6.1)
+#   DEVICE=0,1,2   GPUs to train on (TRAINING_GUIDE.md §6.0)
+#   BATCH=24       global batch, 8 images/GPU; must divide by the GPU count (§6.1)
 #   EPOCHS=100     epochs per stage
 #   IMGSZ=640      image size
 #   WORKERS=8      dataloader workers PER GPU
@@ -26,8 +26,8 @@ set -uo pipefail
 cd "$(dirname "$0")/../.."
 
 PY="${PY:-python}"
-DEVICE="${DEVICE:-1,2,3}"
-BATCH="${BATCH:-96}"
+DEVICE="${DEVICE:-0,1,2}"
+BATCH="${BATCH:-24}"
 EPOCHS="${EPOCHS:-100}"
 IMGSZ="${IMGSZ:-640}"
 WORKERS="${WORKERS:-8}"

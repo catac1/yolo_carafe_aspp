@@ -2,7 +2,7 @@
 
 This guide covers how to download and verify the **COCO 2017 Instance Segmentation (COCO-Seg)** dataset, and how to train the custom **YOLO26s-Seg** models (Stages A0 through A4).
 
-**Target environment:** single headless Linux node, Python 3.12, training on **3× NVIDIA RTX 6000** (devices **1, 2, 3** — GPU 0 is occupied and OOMs, see §6.0).
+**Target environment:** single headless Linux node, Python 3.12, training on **3× NVIDIA RTX 3090 (24 GB)** on devices **0, 1, 2** — the plan target in `docs/plan/`.
 The package depends on `opencv-python-headless`, so no X11/Qt libraries are required, and training runs entirely on PyTorch `.pt` weights — no export toolchains are installed.
 
 ### First run on a new machine, in order
@@ -57,14 +57,14 @@ for i in range(torch.cuda.device_count()):
 "
 ```
 
-Expect to see the RTX 6000s listed. Devices 1, 2 and 3 are the training GPUs; GPU 0 is excluded (§6.0).
+Expect three RTX 3090 entries, each reporting close to 24 GB free, before attempting any DDP run.
 
 ### CUDA build of PyTorch
 
-The default PyPI `torch` wheel may not carry kernels for your GPU. If `torch.cuda.is_available()` is `False`, or training dies with `no kernel image is available for execution on the device`, install a matching CUDA build — for example for Blackwell (`sm_120`, RTX PRO 6000), which needs CUDA 12.8 or newer:
+The RTX 3090 is Ampere (`sm_86`), which every current PyPI `torch` wheel supports, so the default install normally works. If `torch.cuda.is_available()` is `False`, or training dies with `no kernel image is available for execution on the device`, the wheel is CPU-only or mismatched against the driver — reinstall a CUDA build:
 
 ```bash
-uv pip install --force-reinstall torch torchvision --index-url https://download.pytorch.org/whl/cu128
+uv pip install --force-reinstall torch torchvision --index-url https://download.pytorch.org/whl/cu124
 ```
 
 Check your architecture against the installed build with:
@@ -100,10 +100,10 @@ In Ultralytics, the standard dataset configuration [`ultralytics/cfg/datasets/co
 
 ### Default Download Location
 
-The default `datasets_dir` setting is **`/workspace/coco_dataset`**, so COCO-Seg lands at:
+The default `datasets_dir` resolves to **`$HOME/yolo_custom/coco_dataset`** (`Path.home() / "yolo_custom" / "coco_dataset"`), so COCO-Seg lands at:
 
 ```text
-/workspace/coco_dataset/coco/
+$HOME/yolo_custom/coco_dataset/coco/
 ├── images/
 │   ├── train2017/     (118,287 images)
 │   └── val2017/       (5,000 images)
@@ -114,10 +114,10 @@ The default `datasets_dir` setting is **`/workspace/coco_dataset`**, so COCO-Seg
 └── val2017.txt
 ```
 
-Make sure the directory exists and is writeable by the training user before the first download:
+It is under your home directory, so no elevated permissions are needed — just confirm it exists and has room (§1 gives the ~45 GB figure):
 
 ```bash
-sudo mkdir -p /workspace/coco_dataset && sudo chown "$USER" /workspace/coco_dataset
+mkdir -p "$HOME/yolo_custom/coco_dataset" && df -h "$HOME/yolo_custom/coco_dataset"
 ```
 
 > **Note:** the default only applies when no Ultralytics settings file exists yet. If the machine has already run Ultralytics, its saved `datasets_dir` is preserved across upgrades — override it explicitly with Method 1 below.
@@ -126,15 +126,17 @@ sudo mkdir -p /workspace/coco_dataset && sudo chown "$USER" /workspace/coco_data
 
 #### Method 1: Change Ultralytics Global Setting (Recommended)
 
-- **Via Python:**
+- **Via Python:** (`$HOME` is not expanded inside a Python string — build the path instead)
     ```python
+    from pathlib import Path
+
     from ultralytics import settings
 
-    settings.update({"datasets_dir": "/workspace/coco_dataset"})
+    settings.update({"datasets_dir": str(Path.home() / "yolo_custom" / "coco_dataset")})
     ```
 - **Via CLI:**
     ```bash
-    uv run --no-sync yolo settings datasets_dir=/workspace/coco_dataset
+    uv run --no-sync yolo settings datasets_dir=$HOME/yolo_custom/coco_dataset
     ```
 
 #### Method 2: Custom Location in Python Script
@@ -168,7 +170,7 @@ Because `path` is absolute, Ultralytics ignores `datasets_dir` and downloads dir
 ### Option A: Auto-Download via Validation (Recommended)
 
 ```bash
-uv run --no-sync yolo segment val model=checkpoints/yolo26s-seg.pt data=coco.yaml imgsz=640 device=1
+uv run --no-sync yolo segment val model=checkpoints/yolo26s-seg.pt data=coco.yaml imgsz=640 device=0
 ```
 
 ### Option B: Programmatic Download via Python
@@ -188,7 +190,7 @@ To debug training without waiting for a 25 GB download:
 ### 3.1 If the Dataset Is Missing
 
 ```text
-ls: cannot access '/workspace/coco_dataset/coco/val2017.txt': No such file or directory
+ls: cannot access '$HOME/yolo_custom/coco_dataset/coco/val2017.txt': No such file or directory
 ```
 
 `val2017.txt` ships inside the labels archive, so this means the download has not run (or ran somewhere else). Check where Ultralytics is actually pointing first — a settings file written before `datasets_dir` was changed keeps its old value, because the schema migration preserves existing settings:
@@ -197,16 +199,16 @@ ls: cannot access '/workspace/coco_dataset/coco/val2017.txt': No such file or di
 uv run --no-sync yolo settings | grep datasets_dir
 ```
 
-If it is not `/workspace/coco_dataset`, set it explicitly:
+If it is not `$HOME/yolo_custom/coco_dataset`, set it explicitly:
 
 ```bash
-uv run --no-sync yolo settings datasets_dir=/workspace/coco_dataset
+uv run --no-sync yolo settings datasets_dir=$HOME/yolo_custom/coco_dataset
 ```
 
 Then confirm the directory is writeable by the training user and has ~45 GB free:
 
 ```bash
-mkdir -p /workspace/coco_dataset && df -h /workspace/coco_dataset
+mkdir -p $HOME/yolo_custom/coco_dataset && df -h $HOME/yolo_custom/coco_dataset
 ```
 
 Now download (~20 GB over the network, expect 20-60 minutes):
@@ -218,14 +220,14 @@ uv run --no-sync python -c "from ultralytics.data.utils import check_det_dataset
 The expected result — note the labels archive is what creates the `.txt` index files:
 
 ```bash
-ls /workspace/coco_dataset/coco/
+ls $HOME/yolo_custom/coco_dataset/coco/
 # images/  labels/  train2017.txt  val2017.txt  LICENSE  README.txt
 ```
 
 Once `experiments/scripts/check_coco.py` passes (§4), reclaim ~20 GB by deleting the archives that Ultralytics leaves behind:
 
 ```bash
-rm -f /workspace/coco_dataset/coco/images/*.zip /workspace/coco_dataset/*.zip
+rm -f $HOME/yolo_custom/coco_dataset/coco/images/*.zip $HOME/yolo_custom/coco_dataset/*.zip
 ```
 
 To train immediately without waiting for the download, use `data=coco8-seg.yaml` — it fetches in seconds and exercises the identical code path.
@@ -290,50 +292,49 @@ Alternatively, copy an existing `checkpoints/` directory across (~131 MB) with `
 
 ## 6. How to Train the Model
 
-All commands below assume the plan target: **3× RTX 6000, single node, Linux**, training on **GPUs 1, 2 and 3** — GPU 0 is reserved and will OOM (see §6.0).
+All commands below assume the plan target: **3× RTX 3090 24 GB, single node, Linux**, training on **GPUs 0, 1 and 2**.
 
-### 6.0 Selecting GPUs (skip GPU 0)
+### 6.0 Selecting GPUs
 
-GPU 0 on this host is not available for training — it is already occupied and a run placed on it dies with CUDA OOM. Every command in this guide therefore targets **devices 1, 2, 3**.
-
-Confirm what is free before launching; the `memory.used` column should be near zero on 1, 2 and 3:
+The plan target is all three cards, `device=0,1,2`. Confirm they are idle before launching — DDP claims every device in the list, and a card already holding memory will OOM partway into epoch 1 rather than at startup:
 
 ```bash
 nvidia-smi --query-gpu=index,name,memory.used,memory.total,utilization.gpu --format=csv
-nvidia-smi --query-compute-apps=gpu_uuid,pid,used_memory --format=csv   # what is holding GPU 0
+nvidia-smi --query-compute-apps=gpu_uuid,pid,used_memory --format=csv   # what is holding a busy card
 ```
 
-There are two ways to select them, and they differ in how the GPUs are numbered:
+If one card is occupied (a display server, someone else's job, a leaked process from a killed run), train on the rest. There are two ways to do that, and they number GPUs differently:
 
 ```bash
 # A. Ultralytics device argument - indices are PHYSICAL, as nvidia-smi reports them
-yolo segment train ... device=1,2,3
+yolo segment train ... device=1,2
 
 # B. CUDA_VISIBLE_DEVICES - remaps them, so the visible set is renumbered from 0
-CUDA_VISIBLE_DEVICES=1,2,3 yolo segment train ... device=0,1,2
+CUDA_VISIBLE_DEVICES=1,2 yolo segment train ... device=0,1
 ```
 
-Both run on the same hardware. Do not combine them carelessly: with `CUDA_VISIBLE_DEVICES=1,2,3` set, `device=1,2,3` refers to the *second, third and fourth visible* GPUs — only one of which exists — and the run fails with an invalid device ordinal. This guide uses form A throughout and sets no `CUDA_VISIBLE_DEVICES`.
+Do not combine them carelessly: with `CUDA_VISIBLE_DEVICES=1,2` set, `device=1,2` means the *second and third visible* GPUs — only one of which exists — and the run fails with an invalid device ordinal. This guide uses form A and sets no `CUDA_VISIBLE_DEVICES`.
 
-Form B is the safer choice if anything else on the box might touch GPU 0, because the training process then cannot address it at all.
+Dropping to two GPUs also changes the batch constraint: `batch` must divide by the number of devices, so use `batch=16` on two cards rather than `24`.
 
-### 6.1 Pick the Batch Size for Your Card
+### 6.1 Pick the Batch Size
 
-DDP splits the `batch` argument across GPUs, so **the global batch must be divisible by 3**. Ultralytics reports the per-GPU split at startup — confirm it matches the table before letting a 100-epoch run proceed.
+DDP splits the `batch` argument across GPUs, so **the global batch must be divisible by 3**. Ultralytics reports the per-GPU split at startup — confirm it before letting a 100-epoch run proceed.
 
-| Card                       | VRAM  | Per-GPU batch | `batch` (3 GPUs) |
-| :------------------------- | :---- | :------------ | :--------------- |
-| RTX 6000 (Turing)          | 24 GB | 16            | `48`             |
-| RTX 6000 Ada               | 48 GB | 32            | `96`             |
-| RTX PRO 6000 Blackwell     | 96 GB | 64            | `192`            |
+| Per-GPU batch | `batch` (3× RTX 3090) | Notes                                                         |
+| :------------ | :-------------------- | :------------------------------------------------------------ |
+| 8             | `24`                  | **Plan default.** Comfortable headroom on 24 GB, including A4. |
+| 16            | `48`                  | Only if §6.2 shows real headroom; verify on A4 first.          |
 
-These are starting points for YOLO26s-Seg at `imgsz=640` with `amp=True`. Segmentation masks make memory scale worse than detection, and the A4 DeepLabV3+ decoder is the heaviest of the five stages — if A4 hits CUDA OOM, drop one row and keep every stage on the same batch size so the ablation stays comparable.
+24 GB is the binding constraint here. Segmentation masks make memory scale worse than detection, and the A4 DeepLabV3+ decoder is the heaviest of the five stages, so a batch that fits A0 may still OOM on A4. **Keep `batch` identical across all five stages** — if A4 does not fit at 48, run the whole ablation at 24 rather than varying it, or the comparison is meaningless.
 
-Confirm what you actually have before choosing:
+To find the ceiling empirically, run one stage with `batch=-1` and let Ultralytics auto-size for ~60% VRAM use, then round the reported value down to a multiple of 3 and pin it for every stage:
 
 ```bash
-nvidia-smi --query-gpu=index,name,memory.total,driver_version --format=csv
+uv run --no-sync yolo segment train   model=checkpoints/yolo26s-seg-carafe-aspp-deeplabv3plus_pretrained.pt   data=coco8-seg.yaml epochs=1 batch=-1 imgsz=640 device=0   project=experiments/results name=A4_batch_probe
 ```
+
+If a run OOMs mid-training rather than at startup, the cause is usually a memory spike during mask loss on a crowded image — drop one row in the table rather than trimming by a few images.
 
 ### 6.2 Quick Smoke Test
 
@@ -346,7 +347,7 @@ uv run --no-sync yolo segment train \
   epochs=1 \
   batch=2 \
   imgsz=640 \
-  device=1 \
+  device=0 \
   amp=True \
   project=experiments/results \
   name=A4_smoke_test
@@ -361,15 +362,15 @@ uv run --no-sync yolo segment train \
   epochs=1 \
   batch=3 \
   imgsz=640 \
-  device=1,2,3 \
+  device=0,1,2 \
   amp=True \
   project=experiments/results \
   name=A4_ddp_smoke
 ```
 
-### 6.3 Full Training (3× RTX 6000 DDP)
+### 6.3 Full Training (3× RTX 3090 DDP)
 
-`batch=96` below assumes 48 GB cards — substitute your row from §6.1:
+`batch=24` is the plan default for 24 GB cards — see §6.1 before raising it:
 
 ```bash
 uv run --no-sync yolo segment train \
@@ -377,9 +378,9 @@ uv run --no-sync yolo segment train \
   pretrained=checkpoints/yolo26s-seg-carafe-aspp-deeplabv3plus_pretrained.pt \
   data=coco.yaml \
   epochs=100 \
-  batch=96 \
+  batch=24 \
   imgsz=640 \
-  device=1,2,3 \
+  device=0,1,2 \
   workers=8 \
   amp=True \
   seed=0 \
@@ -389,10 +390,10 @@ uv run --no-sync yolo segment train \
 
 Notes specific to the 3-GPU setup:
 
-- **`workers` is per-GPU.** With `workers=8` on 3 GPUs you get 24 dataloader processes; keep `workers × 3` at or below the host's physical core count (`nproc`). Too many workers starves the GPUs rather than feeding them.
+- **`workers` is per-GPU.** With `workers=8` on 3 GPUs you get 24 dataloader processes; keep `workers × 3` at or below the host's physical core count (`nproc`). Too many workers starves the GPUs rather than feeding them. On a smaller 3090 workstation `workers=4` is often the right value.
 - **Ultralytics spawns DDP itself.** Run the plain `yolo` command above — do not wrap it in `torchrun` or `python -m torch.distributed.run`, which produces nested process groups.
-- **Scale the learning rate with the global batch.** `lr0` defaults are tuned around batch 64; tripling the batch usually wants a proportionally higher `lr0` plus warmup. Try `lr0=0.01 warmup_epochs=5` if loss plateaus early.
-- **Rank 0 is the first device in the list, not GPU 0.** With `device=1,2,3` the rank-0 process runs on physical GPU 1. Checkpoints, plots, and `results.csv` are written once under `experiments/results/<name>/`, not three times.
+- **Learning rate.** `lr0` defaults are tuned around batch 64, so at `batch=24` the stock defaults are already reasonable — leave them alone unless you raise the batch (§6.1).
+- **Only rank 0 writes.** Checkpoints, plots, and `results.csv` appear once under `experiments/results/<name>/`, not three times.
 - **A killed run can leak GPU memory.** If a DDP run dies uncleanly, clear orphans before relaunching.
 
 ### 6.4 Running the Full A0-A4 Ablation
@@ -410,12 +411,12 @@ Common variations:
 ```bash
 bash experiments/scripts/run_ablation.sh A3 A4        # only selected stages
 DRY_RUN=1 bash experiments/scripts/run_ablation.sh    # print the commands, run nothing
-BATCH=192 bash experiments/scripts/run_ablation.sh    # 96 GB cards (§6.1)
-DEVICE=1,2 BATCH=64 bash experiments/scripts/run_ablation.sh   # two GPUs
+BATCH=48 bash experiments/scripts/run_ablation.sh     # if 16 images/GPU fits (§6.1)
+DEVICE=0,1 BATCH=16 bash experiments/scripts/run_ablation.sh   # two GPUs
 DATA=coco8-seg.yaml EPOCHS=1 BATCH=3 bash experiments/scripts/run_ablation.sh   # end-to-end check
 ```
 
-Settings, overridable by prefixing the command: `DEVICE=1,2,3`, `BATCH=96`, `EPOCHS=100`, `IMGSZ=640`, `WORKERS=8` (per GPU), `SEED=0`, `DATA=coco.yaml`, `PROJECT=experiments/results`.
+Settings, overridable by prefixing the command: `DEVICE=0,1,2`, `BATCH=24`, `EPOCHS=100`, `IMGSZ=640`, `WORKERS=8` (per GPU), `SEED=0`, `DATA=coco.yaml`, `PROJECT=experiments/results`.
 
 **Re-entrancy.** A sweep of this length will be interrupted. Re-running the script:
 
@@ -434,7 +435,7 @@ tmux new -s ablation 'bash experiments/scripts/run_ablation.sh'
 ### 6.5 Monitoring
 
 ```bash
-watch -n 5 nvidia-smi                                   # utilization and VRAM headroom on 1,2,3
+watch -n 5 nvidia-smi                                   # utilization and VRAM headroom on 0,1,2
 tail -f experiments/results/A4_3gpu_ddp/results.csv     # per-epoch metrics
 ```
 
@@ -450,13 +451,13 @@ from ultralytics import YOLO
 # Load model with warm-started pretrained weights
 model = YOLO("checkpoints/yolo26s-seg-carafe-aspp-deeplabv3plus_pretrained.pt")
 
-# Train model on 3x RTX 6000
+# Train model on 3x RTX 3090
 results = model.train(
     data="coco.yaml",
     epochs=100,
-    batch=96,  # global batch, 32 images/GPU across 3 GPUs; must be divisible by 3
+    batch=24,  # global batch, 8 images/GPU across 3 GPUs; must be divisible by 3
     imgsz=640,
-    device="1,2,3",
+    device="0,1,2",
     workers=8,  # per-GPU; 8 x 3 = 24 dataloader processes
     amp=True,
     seed=0,
@@ -477,7 +478,7 @@ Launch this as a script (`python train.py`), not from an interactive interpreter
 uv run --no-sync yolo segment train resume model=experiments/results/A4_3gpu_ddp/weights/last.pt
 ```
 
-The resumed run reuses the saved `device=1,2,3` and `batch`, so it re-forms the same 3-GPU DDP group. To change the batch size or GPU count you must start a fresh run rather than resume.
+The resumed run reuses the saved `device=0,1,2` and `batch`, so it re-forms the same 3-GPU DDP group. To change the batch size or GPU count you must start a fresh run rather than resume.
 
 A 100-epoch COCO-Seg run takes well over a day, so launch it detached under `tmux` (preferred — you can reattach to a live console) or `nohup`:
 
