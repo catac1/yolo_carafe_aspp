@@ -17,12 +17,21 @@
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 
-PY="${PY:-python}"
+# Run python the same way this script runs yolo: through uv, so the project
+# virtualenv is used whether or not it happens to be activated. Set PY to use a
+# specific interpreter instead (e.g. PY=/path/to/.venv/bin/python).
+py() {
+    if [ -n "${PY:-}" ]; then
+        "$PY" "$@"
+    else
+        uv run --no-sync python "$@"
+    fi
+}
 
 # Fail early with an actionable message instead of a traceback from deep inside
 # the import chain when the virtualenv was never created or activated.
-if ! "$PY" -c "import cv2, torch, ultralytics" 2>/dev/null; then
-    echo "error: the ultralytics environment is not importable with '$PY'." >&2
+if ! py -c "import cv2, torch, ultralytics" 2>/dev/null; then
+    echo "error: the ultralytics environment is not importable." >&2
     echo "       Create and activate it first (see TRAINING_GUIDE.md section 0):" >&2
     echo "         uv venv --python 3.12 && source .venv/bin/activate" >&2
     echo "         uv pip install -e \".[extra]\"" >&2
@@ -40,7 +49,7 @@ mkdir -p checkpoints experiments/notes
 # A0: baseline, downloaded from the Ultralytics GitHub release assets
 if [ ! -f "checkpoints/yolo26${SCALE}-seg.pt" ]; then
     echo "==> Downloading A0 baseline yolo26${SCALE}-seg.pt"
-    "$PY" -c "
+    py -c "
 from pathlib import Path
 from ultralytics.utils.downloads import attempt_download_asset
 Path('checkpoints').mkdir(exist_ok=True)
@@ -56,7 +65,7 @@ transfer() {
     local stage="$1" config="$2" output="$3"
     shift 3
     echo "==> ${stage}: ${config}"
-    "$PY" experiments/scripts/transfer_weights.py \
+    py experiments/scripts/transfer_weights.py \
         --config "experiments/configs/${config}.yaml" \
         --checkpoint "checkpoints/yolo26${SCALE}-seg.pt" \
         --output "checkpoints/${output}.pt" \

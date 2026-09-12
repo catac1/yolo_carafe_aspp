@@ -33,7 +33,16 @@
 set -uo pipefail
 cd "$(dirname "$0")/../.."
 
-PY="${PY:-python}"
+# Run python the same way this script runs yolo: through uv, so the project
+# virtualenv is used whether or not it happens to be activated. Set PY to use a
+# specific interpreter instead (e.g. PY=/path/to/.venv/bin/python).
+py() {
+    if [ -n "${PY:-}" ]; then
+        "$PY" "$@"
+    else
+        uv run --no-sync python "$@"
+    fi
+}
 DEVICE="${DEVICE:-0,1,2}"
 BATCH="${BATCH:-24}"
 EPOCHS="${EPOCHS:-100}"
@@ -47,7 +56,7 @@ PROJECT="${PROJECT:-experiments/results}"
 # land in runs/segment/experiments/results/... and the resume checks below would never
 # find them. Absolute keeps save_dir exactly at $PROJECT/$name.
 mkdir -p "$PROJECT"
-PROJECT="$("$PY" -c "import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve())" "$PROJECT")"
+PROJECT="$(py -c "import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve())" "$PROJECT")"
 DRY_RUN="${DRY_RUN:-0}"
 FORCE="${FORCE:-0}"
 PROBE="${PROBE:-0}"
@@ -76,8 +85,8 @@ for w in "${want[@]}"; do
     selected+=("$hit")
 done
 
-if ! "$PY" -c "import cv2, torch, ultralytics" 2>/dev/null; then
-    echo "error: the ultralytics environment is not importable with '$PY'." >&2
+if ! py -c "import cv2, torch, ultralytics" 2>/dev/null; then
+    echo "error: the ultralytics environment is not importable." >&2
     echo "       See TRAINING_GUIDE.md section 0:" >&2
     echo "         uv venv --python 3.12 && source .venv/bin/activate && uv pip install -e \".[extra]\"" >&2
     exit 1
@@ -134,7 +143,7 @@ stage_state() {  # $1 = run directory -> "done" | "resume" | "fresh"
         echo fresh
         return
     fi
-    "$PY" - "$last" <<'PYSTATE'
+    py - "$last" <<'PYSTATE'
 import sys
 import torch
 try:
@@ -182,7 +191,7 @@ for s in "${selected[@]}"; do
             vlog="$PROJECT/logs/${name}_val_$(date +%Y%m%d_%H%M%S).log"
             echo "    $stage: timing one validation pass on the full val split"
             uv run --no-sync yolo segment val model="$out/weights/last.pt" data="$DATA"                 batch="$BATCH" imgsz="$IMGSZ" device="$DEVICE" workers="$WORKERS"                 plots=False > "$vlog" 2>&1
-            row=$("$PY" - "$out/results.csv" "$vlog" "$PROBE_FRACTION" "$EPOCHS" "$stage" <<'EOF'
+            row=$(py - "$out/results.csv" "$vlog" "$PROBE_FRACTION" "$EPOCHS" "$stage" <<'EOF'
 import csv, re, sys
 csv_path, val_log, frac, epochs, stage = sys.argv[1], sys.argv[2], float(sys.argv[3]), int(sys.argv[4]), sys.argv[5]
 try:
@@ -265,7 +274,7 @@ if [ "$PROBE" = "1" ] && [ ${#probe_rows[@]} -ne 0 ]; then
         IFS='|' read -r s tr vl ep tot <<< "$r"
         printf '  %-6s %14s %8s %14s %14s
 ' "$s" "$tr" "$vl" "$ep" "$tot"
-        total=$("$PY" -c "import sys; print(f'{float(sys.argv[1]) + float(sys.argv[2]):.2f}')" "$total" "${tot% d}")
+        total=$(py -c "import sys; print(f'{float(sys.argv[1]) + float(sys.argv[2]):.2f}')" "$total" "${tot% d}")
     done
     printf '  %-6s %14s %8s %14s %12s d
 ' TOTAL "" "" "" "$total"
