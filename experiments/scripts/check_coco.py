@@ -3,6 +3,7 @@
 
 import argparse
 from pathlib import Path
+
 from ultralytics.data.utils import check_det_dataset
 from ultralytics.utils import LOGGER
 
@@ -11,7 +12,7 @@ def check_coco_integrity(data_cfg: str = "coco.yaml", num_samples: int = 20):
     """Verify image counts, polygon formatting, and class range for COCO-Seg."""
     LOGGER.info(f"Loading dataset configuration from {data_cfg}...")
     data = check_det_dataset(data_cfg)
-    
+
     train_path = Path(data.get("train", ""))
     val_path = Path(data.get("val", ""))
     names = data.get("names", {})
@@ -27,7 +28,7 @@ def check_coco_integrity(data_cfg: str = "coco.yaml", num_samples: int = 20):
             continue
 
         if img_path.is_file():  # .txt file with image paths
-            with open(img_path, "r", encoding="utf-8") as f:
+            with open(img_path, encoding="utf-8") as f:
                 img_files = [line.strip() for line in f if line.strip()]
         else:
             img_files = list(img_path.glob("*.*"))
@@ -43,9 +44,9 @@ def check_coco_integrity(data_cfg: str = "coco.yaml", num_samples: int = 20):
             label_p = Path(str(img_p.parent).replace("images", "labels")) / f"{img_p.stem}.txt"
             if not label_p.exists():
                 continue
-            
+
             samples_checked += 1
-            with open(label_p, "r", encoding="utf-8") as f:
+            with open(label_p, encoding="utf-8") as f:
                 for line_idx, line in enumerate(f):
                     parts = line.strip().split()
                     if not parts:
@@ -53,13 +54,13 @@ def check_coco_integrity(data_cfg: str = "coco.yaml", num_samples: int = 20):
                     cls_id = int(parts[0])
                     coords = [float(x) for x in parts[1:]]
                     if not (0 <= cls_id < num_classes):
-                        LOGGER.error(f"{label_p}:{line_idx+1} Invalid class {cls_id}")
+                        LOGGER.error(f"{label_p}:{line_idx + 1} Invalid class {cls_id}")
                         label_errors += 1
                     if len(coords) < 6:
-                        LOGGER.error(f"{label_p}:{line_idx+1} Too few coordinates for polygon: {len(coords)}")
+                        LOGGER.error(f"{label_p}:{line_idx + 1} Too few coordinates for polygon: {len(coords)}")
                         label_errors += 1
                     if any(c < 0.0 or c > 1.05 for c in coords):
-                        LOGGER.error(f"{label_p}:{line_idx+1} Coordinate out of [0, 1] range")
+                        LOGGER.error(f"{label_p}:{line_idx + 1} Coordinate out of [0, 1] range")
                         label_errors += 1
 
         LOGGER.info(f"Checked {samples_checked} label samples in '{split_name}'. Errors detected: {label_errors}")
