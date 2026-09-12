@@ -349,24 +349,38 @@ Notes specific to the 3-GPU setup:
 - **Rank 0 is the first device in the list, not GPU 0.** With `device=1,2,3` the rank-0 process runs on physical GPU 1. Checkpoints, plots, and `results.csv` are written once under `experiments/results/<name>/`, not three times.
 - **A killed run can leak GPU memory.** If a DDP run dies uncleanly, clear orphans before relaunching.
 
-### 6.4 Running the Full A0–A4 Ablation
+### 6.4 Running the Full A0-A4 Ablation
 
-The five stages differ only in `model` and `pretrained`. Hold every other argument fixed so the comparison stays clean, and run them in series — three GPUs serve one stage at a time, not one stage per GPU:
+The five stages differ only in `model` and `pretrained`; every other argument is held fixed so the comparison stays clean. They run in series — three GPUs serve one stage at a time, not one stage per GPU.
 
 ```bash
-run_stage() {
-  uv run --no-sync yolo segment train \
-    model="$2" pretrained="$3" \
-    data=coco.yaml epochs=100 batch=96 imgsz=640 \
-    device=1,2,3 workers=8 amp=True seed=0 \
-    project=experiments/results name="$1_3gpu_ddp"
-}
+bash experiments/scripts/run_ablation.sh
+```
 
-run_stage A0 ultralytics/cfg/models/26/yolo26-seg.yaml checkpoints/yolo26s-seg.pt
-run_stage A1 experiments/configs/yolo26s-seg-carafe.yaml checkpoints/yolo26s-seg-carafe_pretrained.pt
-run_stage A2 experiments/configs/yolo26s-seg-aspp.yaml checkpoints/yolo26s-seg-aspp_pretrained.pt
-run_stage A3 experiments/configs/yolo26s-seg-carafe-aspp.yaml checkpoints/yolo26s-seg-carafe-aspp_pretrained.pt
-run_stage A4 experiments/configs/yolo26s-seg-carafe-aspp-deeplabv3plus.yaml checkpoints/yolo26s-seg-carafe-aspp-deeplabv3plus_pretrained.pt
+The script validates the environment, configs, and checkpoints before starting, so a typo fails in seconds rather than three stages in. It refuses a `BATCH` that is not divisible by the GPU count, writes a timestamped log per stage under `experiments/results/logs/`, and reports which stages failed instead of stopping the sweep at the first one.
+
+Common variations:
+
+```bash
+bash experiments/scripts/run_ablation.sh A3 A4        # only selected stages
+DRY_RUN=1 bash experiments/scripts/run_ablation.sh    # print the commands, run nothing
+BATCH=192 bash experiments/scripts/run_ablation.sh    # 96 GB cards (§6.1)
+DEVICE=1,2 BATCH=64 bash experiments/scripts/run_ablation.sh   # two GPUs
+DATA=coco8-seg.yaml EPOCHS=1 BATCH=3 bash experiments/scripts/run_ablation.sh   # end-to-end check
+```
+
+Settings, overridable by prefixing the command: `DEVICE=1,2,3`, `BATCH=96`, `EPOCHS=100`, `IMGSZ=640`, `WORKERS=8` (per GPU), `SEED=0`, `DATA=coco.yaml`, `PROJECT=experiments/results`.
+
+**Re-entrancy.** A sweep of this length will be interrupted. Re-running the script:
+
+- **skips** a stage that already has `weights/best.pt` — it finished
+- **resumes** a stage that has `weights/last.pt` but no `best.pt` — it was interrupted
+- `FORCE=1` retrains a stage from scratch regardless
+
+So after a crash, reboot, or OOM, just run the same command again. Launch it detached, since the full sweep is five multi-day runs:
+
+```bash
+tmux new -s ablation 'bash experiments/scripts/run_ablation.sh'
 ```
 
 `seed=0` makes the runs reproducible. Keep `batch` identical across all five stages, including A4 — changing it mid-ablation invalidates the comparison.
