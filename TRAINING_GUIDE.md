@@ -3,6 +3,7 @@
 This guide covers how to download and verify the **COCO 2017 Instance Segmentation (COCO-Seg)** dataset, and how to train the custom **YOLO26s-Seg** models (Stages A0 through A4).
 
 **Target environment:** single headless Linux node, Python 3.12, training on **3× NVIDIA RTX 6000** (devices **1, 2, 3** — GPU 0 is occupied and OOMs, see §6.0).
+**This branch runs the ablation one stage per GPU, concurrently** (§6.4), rather than five sequential DDP runs.
 The package depends on `opencv-python-headless`, so no X11/Qt libraries are required, and training runs entirely on PyTorch `.pt` weights — no export toolchains are installed.
 
 ### First run on a new machine, in order
@@ -395,62 +396,61 @@ Notes specific to the 3-GPU setup:
 - **Rank 0 is the first device in the list, not GPU 0.** With `device=1,2,3` the rank-0 process runs on physical GPU 1. Checkpoints, plots, and `results.csv` are written once under `experiments/results/<name>/`, not three times.
 - **A killed run can leak GPU memory.** If a DDP run dies uncleanly, clear orphans before relaunching.
 
-### 6.4 Running the Full A0-A4 Ablation
+### 6.4 Running the Full A0-A4 Ablation (one stage per GPU)
 
-The five stages differ only in `model` and `pretrained`; every other argument is held fixed so the comparison stays clean. They run in series — three GPUs serve one stage at a time, not one stage per GPU.
+This branch runs the five stages **concurrently, one per GPU**, instead of five sequential DDP runs. Stages are dealt round-robin onto the GPUs and each GPU works its own queue in series:
+
+```text
+GPU 1: A0 -> A3
+GPU 2: A1 -> A4
+GPU 3: A2
+```
+
+Five stages over three GPUs is **two waves**, so the sweep finishes in roughly two stage-times rather than five. The trade is per-stage speed: each stage now has one GPU instead of three, so an individual stage takes about 3x longer than the same stage under DDP. Total throughput wins; time-to-first-result does not. If you need one stage finished as early as possible, use the DDP driver on the `rtx6000` branch.
 
 ```bash
 bash experiments/scripts/run_ablation.sh
 ```
 
-The script validates the environment, configs, and checkpoints before starting, so a typo fails in seconds rather than three stages in. It refuses a `BATCH` that is not divisible by the GPU count, writes a timestamped log per stage under `experiments/results/logs/`, and reports which stages failed instead of stopping the sweep at the first one.
+Each stage is pinned with `CUDA_VISIBLE_DEVICES=<gpu>` and runs with `device=0`, so a stage physically cannot touch a GPU another stage is training on. Results go to `<stage>_1gpu/` — distinct from the DDP branch's `<stage>_3gpu_ddp/`, so both sets can coexist.
+
+**`batch` is per stage, not global.** Each stage owns one GPU, so `BATCH=32` means 32 images on that one card — the same per-GPU load as `batch=96` split three ways under DDP. Do not carry the DDP number over.
 
 Common variations:
 
 ```bash
 bash experiments/scripts/run_ablation.sh A3 A4        # only selected stages
-DRY_RUN=1 bash experiments/scripts/run_ablation.sh    # print the commands, run nothing
-BATCH=192 bash experiments/scripts/run_ablation.sh    # 96 GB cards (§6.1)
-DEVICE=1,2 BATCH=64 bash experiments/scripts/run_ablation.sh   # two GPUs
-DATA=coco8-seg.yaml EPOCHS=1 BATCH=3 bash experiments/scripts/run_ablation.sh   # end-to-end check
-PROBE=1 bash experiments/scripts/run_ablation.sh      # measure time per stage, train nothing
+DRY_RUN=1 bash experiments/scripts/run_ablation.sh    # print the GPU plan, run nothing
+PROBE=1 bash experiments/scripts/run_ablation.sh      # measure time per stage
+GPUS=1,2 bash experiments/scripts/run_ablation.sh     # two GPUs -> three waves
+BATCH=64 bash experiments/scripts/run_ablation.sh     # if one card has headroom
 ```
 
-Settings, overridable by prefixing the command: `DEVICE=1,2,3`, `BATCH=96`, `EPOCHS=100`, `IMGSZ=640`, `WORKERS=8` (per GPU), `SEED=0`, `DATA=coco.yaml`, `PROJECT=experiments/results`, `PROBE=0`, `PROBE_FRACTION=0.01`.
+Settings, overridable by prefixing the command: `GPUS=1,2,3`, `BATCH=32` (per stage), `EPOCHS=100`, `IMGSZ=640`, `WORKERS=6` (per stage), `SEED=0`, `DATA=coco.yaml`, `PROJECT=experiments/results`, `PROBE=0`, `PROBE_FRACTION=0.01`.
 
-**Measure the cost before committing to it.** `PROBE=1` trains one epoch on 1% of the data per stage and extrapolates a per-epoch and total run time, so you know what the sweep costs before starting it:
+**Watch the host, not just the GPUs.** Three concurrent stages multiply every host-side cost:
+
+- **Dataloader processes**: `WORKERS x concurrent stages`. The default 6 gives 18 — keep that at or below `nproc`. This is why the default is lower here than the DDP driver's 8.
+- **Disk**: three independent readers over the same 20 GB of COCO. On a spinning disk or network mount this, not the GPUs, will set your epoch time. `cache=ram` helps only if the host has room for three copies.
+- **RAM**: each stage holds its own dataset index and worker pool.
+
+**Measure before committing.** `PROBE=1` runs all stages concurrently on 1% of the data, so the reported numbers already include the I/O contention the real sweep will see — more representative than the DDP branch's serial probe:
 
 ```bash
 PROBE=1 bash experiments/scripts/run_ablation.sh
 ```
 
-It prints a measured table:
+It reports per-stage times and converts them to wall time using the wave count, since the sweep finishes with the busiest GPU rather than the sum of all stages.
 
-```text
-  stage       probe      per epoch     100 epochs
-  ------ ---------- -------------- --------------
-  A0           ...            ...            ...
-  ...
-  TOTAL                                      ... d
-```
+**Re-entrancy.** Same rules as the DDP driver: a stage with `weights/best.pt` is skipped, a stage with only `weights/last.pt` is resumed, and `FORCE=1` retrains from scratch. Failures are collected per stage rather than aborting the sweep, and the script exits non-zero naming them. Re-running after a crash picks up where it left off.
 
-Probe runs write to `<stage>_probe/` and never touch the real run directories, so they are safe to repeat. `PROBE_FRACTION=0.02` samples more data for a steadier number. The extrapolation is a **floor** — it scales one epoch's training time linearly and does not model per-epoch validation on the full 5,000-image val set, which the real runs pay every epoch.
-
-Use it to sanity-check the batch size too: if the probe shows a per-epoch time far above expectation, the dataloader is starving the GPUs (§6.5) before you have spent days finding out.
-
-**Re-entrancy.** A sweep of this length will be interrupted. Re-running the script:
-
-- **skips** a stage that already has `weights/best.pt` — it finished
-- **resumes** a stage that has `weights/last.pt` but no `best.pt` — it was interrupted
-- `FORCE=1` retrains a stage from scratch regardless
-
-So after a crash, reboot, or OOM, just run the same command again. Launch it detached, since the full sweep is five multi-day runs:
+Launch detached — this is still a multi-day run:
 
 ```bash
 tmux new -s ablation 'bash experiments/scripts/run_ablation.sh'
 ```
 
-`seed=0` makes the runs reproducible. Keep `batch` identical across all five stages, including A4 — changing it mid-ablation invalidates the comparison.
+`seed=0` makes the runs reproducible. Keep `batch` identical across all five stages — changing it mid-ablation invalidates the comparison.
 
 ### 6.5 Monitoring
 
