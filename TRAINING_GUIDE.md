@@ -452,17 +452,23 @@ Override by prefixing the command, e.g. `BATCH=64 bash experiments/scripts/run_s
 
 #### Measure the cost first
 
-`PROBE=1` trains one epoch on 1% of the data and reports the extrapolated cost, in a few minutes instead of days:
+`PROBE=1` measures the stage and reports what the real run will cost, in a few minutes instead of days:
 
 ```bash
 PROBE=1 bash experiments/scripts/run_stage.sh A4 1
 ```
 
 ```text
-A4 measured: 42s probe -> 70.0 min/epoch -> 4.86 days for 100 epochs on one GPU
+A4 measured on one GPU:
+  train     38.2s on 0.01 of the data ->   63.7 min/epoch full data
+  val       21.4s per epoch on the full val split
+  epoch     64.0 min
+  100 epochs: 4.45 days (106.7 h)
 ```
 
-Probe it on A0 and A4 - the lightest and heaviest stages - to bracket the sweep. Run the probes in the three terminals simultaneously if you want numbers that include the I/O contention three concurrent stages actually cause.
+**How it measures**, because the naive version of this is badly wrong: `fraction` shrinks only the **train** split — validation always runs on the full val set. Timing one epoch with validation on and scaling by `1/fraction` therefore multiplies a fixed cost by 100. Instead the probe trains three epochs with `val=False` and differences epoch 2 against epoch 1, which cancels both one-time startup and validation; it uses three epochs rather than two because Ultralytics validates on the final epoch whatever `val=` says. Validation is then timed once on its own and added back a single time per epoch.
+
+Probe A0 and A4 — the lightest and heaviest stages — to bracket the sweep. Run the probes in three terminals simultaneously if you want numbers that include the I/O contention three concurrent stages actually cause.
 
 #### Host load
 

@@ -119,11 +119,18 @@ fi
 declare -a args
 if [ "$PROBE" = "1" ]; then
     rm -rf "$out"
+    # Three epochs with val=False. `fraction` only shrinks the TRAIN split - validation
+    # always runs on the full val set - so timing a single epoch with validation on
+    # would scale that fixed cost by 1/fraction and wildly overestimate. Differencing
+    # epoch 2 against epoch 1 removes both one-time startup and validation, leaving
+    # the pure per-epoch training cost; validation is measured once, separately, and
+    # added back a single time per epoch. Three epochs, not two, because Ultralytics
+    # validates on the FINAL epoch whatever val= says, so the last row is unusable.
     args=(segment train model="$config" pretrained="$ckpt"
-        data="$DATA" epochs=1 fraction="$PROBE_FRACTION" batch="$BATCH" imgsz="$IMGSZ"
-        device=0 workers="$WORKERS" amp=True seed="$SEED"
+        data="$DATA" epochs=3 fraction="$PROBE_FRACTION" batch="$BATCH" imgsz="$IMGSZ"
+        device=0 workers="$WORKERS" amp=True seed="$SEED" val=False plots=False
         project="$PROJECT" name="$name")
-    mode="timing probe on $PROBE_FRACTION of $DATA"
+    mode="timing probe on $PROBE_FRACTION of $DATA (train timed, val measured separately)"
 elif [ -f "$out/weights/last.pt" ] && [ "$FORCE" != "1" ]; then
     args=(segment train resume model="$out/weights/last.pt")
     mode="resuming from $out/weights/last.pt"
@@ -154,20 +161,51 @@ echo
 if [ "$status" -eq 0 ]; then
     echo "$stage finished. Results: $out"
     if [ "$PROBE" = "1" ] && [ -f "$out/results.csv" ]; then
-        "$PY" - "$out/results.csv" "$PROBE_FRACTION" "$EPOCHS" "$stage" <<'PYEOF'
-import csv, sys
+        # Time one validation pass on the full val split, the cost every real epoch pays.
+        vlog="$PROJECT/logs/${name}_val_$(date +%Y%m%d_%H%M%S).log"
+        echo
+        echo "Measuring one validation pass on the full val split ..."
+        CUDA_VISIBLE_DEVICES="$gpu" uv run --no-sync yolo segment val \
+            model="$out/weights/last.pt" data="$DATA" batch="$BATCH" imgsz="$IMGSZ" \
+            device=0 workers="$WORKERS" plots=False > "$vlog" 2>&1
+        echo
+        "$PY" - "$out/results.csv" "$vlog" "$PROBE_FRACTION" "$EPOCHS" "$stage" <<'PYEOF'
+import csv, re, sys
 
-csv_path, frac, epochs, stage = sys.argv[1], float(sys.argv[2]), int(sys.argv[3]), sys.argv[4]
+csv_path, val_log, frac, epochs, stage = sys.argv[1], sys.argv[2], float(sys.argv[3]), int(sys.argv[4]), sys.argv[5]
+
+# Per-epoch training cost: epoch 2 minus epoch 1 drops one-time startup, and val=False
+# kept validation out of both. Scaling by 1/fraction gives a full-data training epoch.
 try:
     with open(csv_path, newline="") as f:
         rows = list(csv.DictReader(f))
-    key = next(k for k in rows[-1] if k.strip() == "time")
-    probe_s = float(rows[-1][key].strip())
-except Exception:
+    key = next(k for k in rows[0] if k.strip() == "time")
+    times = [float(r[key].strip()) for r in rows]
+except Exception as e:
+    print(f"{stage}: could not read {csv_path} ({e})")
     raise SystemExit(0)
-epoch_s = probe_s / frac
-print(f"{stage} measured: {probe_s:.0f}s probe -> {epoch_s / 60:.1f} min/epoch -> "
-      f"{epoch_s * epochs / 3600 / 24:.2f} days for {epochs} epochs on one GPU")
+# Rows are cumulative; epochs 1 and 2 are both non-final so neither validated.
+train_probe = times[1] - times[0] if len(times) > 2 else times[-1]
+train_full = train_probe / frac
+
+# Validation cost from the per-image speed Ultralytics reports, which excludes the
+# startup and dataset scan a standalone val run pays but a training epoch does not.
+val_s = 0.0
+try:
+    text = open(val_log, encoding="utf-8", errors="replace").read()
+    ms = sum(float(x) for x in re.findall(r"([\d.]+)ms", re.search(r"Speed:.*per image", text).group(0)))
+    images = int(re.search(r"^\s*all\s+(\d+)\s+\d+", text, re.M).group(1))
+    val_s = ms * images / 1000
+except Exception:
+    pass
+
+epoch_s = train_full + val_s
+total_d = epoch_s * epochs / 86400
+print(f"{stage} measured on one GPU:")
+print(f"  train  {train_probe:7.1f}s on {frac:g} of the data -> {train_full / 60:6.1f} min/epoch full data")
+print(f"  val    {val_s:7.1f}s per epoch on the full val split" + ("" if val_s else "  (not measured - see log)"))
+print(f"  epoch  {epoch_s / 60:7.1f} min")
+print(f"  {epochs} epochs: {total_d:.2f} days ({epoch_s * epochs / 3600:.1f} h)")
 PYEOF
     fi
 else
