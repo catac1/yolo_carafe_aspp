@@ -3,7 +3,7 @@
 This guide covers how to download and verify the **COCO 2017 Instance Segmentation (COCO-Seg)** dataset, and how to train the custom **YOLO26s-Seg** models (Stages A0 through A4).
 
 **Target environment:** single headless Linux node, Python 3.12, training on **3× NVIDIA RTX 6000** (devices **1, 2, 3** — GPU 0 is occupied and OOMs, see §6.0).
-**This branch runs the ablation one stage per GPU, concurrently** (§6.4), rather than five sequential DDP runs.
+**This branch runs one stage per GPU, one terminal each, with no DDP** (§6.4).
 The package depends on `opencv-python-headless`, so no X11/Qt libraries are required, and training runs entirely on PyTorch `.pt` weights — no export toolchains are installed.
 
 ### First run on a new machine, in order
@@ -318,9 +318,9 @@ Both run on the same hardware. Do not combine them carelessly: with `CUDA_VISIBL
 
 Form B is the safer choice if anything else on the box might touch GPU 0, because the training process then cannot address it at all.
 
-### 6.1 Pick the Batch Size for Your Card
+### 6.1 Pick the Batch Size (per stage)
 
-DDP splits the `batch` argument across GPUs, so **the global batch must be divisible by 3**. Ultralytics reports the per-GPU split at startup — confirm it matches the table before letting a 100-epoch run proceed.
+Each stage owns one GPU, so `batch` is simply what fits on a single card — there is no global batch to divide and no divisibility constraint. Ultralytics reports peak VRAM per epoch; check it after the first epoch.
 
 | Card                       | VRAM  | Per-GPU batch | `batch` (3 GPUs) |
 | :------------------------- | :---- | :------------ | :--------------- |
@@ -338,119 +338,139 @@ nvidia-smi --query-gpu=index,name,memory.total,driver_version --format=csv
 
 ### 6.2 Quick Smoke Test
 
-Verify the pipeline end to end on 8 images before committing 3 GPUs to a long run. Use a single GPU here — DDP startup noise only obscures real errors:
+Verify the pipeline end to end on 8 images before committing a GPU to a long run:
 
 ```bash
-uv run --no-sync yolo segment train \
-  model=checkpoints/yolo26s-seg-carafe-aspp-deeplabv3plus_pretrained.pt \
-  data=coco8-seg.yaml \
-  epochs=1 \
-  batch=2 \
-  imgsz=640 \
-  device=1 \
-  amp=True \
-  project=experiments/results \
-  name=A4_smoke_test
+DATA=coco8-seg.yaml EPOCHS=1 BATCH=2   bash experiments/scripts/run_stage.sh A4 1
 ```
 
-Then smoke-test DDP itself across all three training GPUs, still on 8 images:
+That exercises the exact path the real run takes — same script, same GPU pinning, same output layout — in about a minute. A4 is the heaviest stage, so if it passes the others will.
+
+Then confirm three stages coexist on three GPUs, still on 8 images, by running these in three terminals at once:
 
 ```bash
-uv run --no-sync yolo segment train \
-  model=checkpoints/yolo26s-seg-carafe-aspp-deeplabv3plus_pretrained.pt \
-  data=coco8-seg.yaml \
-  epochs=1 \
-  batch=3 \
-  imgsz=640 \
-  device=1,2,3 \
-  amp=True \
-  project=experiments/results \
-  name=A4_ddp_smoke
+DATA=coco8-seg.yaml EPOCHS=1 BATCH=2 bash experiments/scripts/run_stage.sh A0 1
+DATA=coco8-seg.yaml EPOCHS=1 BATCH=2 bash experiments/scripts/run_stage.sh A1 2
+DATA=coco8-seg.yaml EPOCHS=1 BATCH=2 bash experiments/scripts/run_stage.sh A2 3
 ```
 
-### 6.3 Full Training (3× RTX 6000 DDP)
+This is worth doing once: it surfaces host-level limits — shared memory (§6.6), dataloader worker count, open file descriptors — that only appear when several stages run together, and it surfaces them in a minute rather than on day two.
 
-`batch=96` below assumes 48 GB cards — substitute your row from §6.1:
+### 6.3 One Stage, One GPU
+
+A single stage is just the script with a stage and a GPU:
 
 ```bash
-uv run --no-sync yolo segment train \
-  model=experiments/configs/yolo26s-seg-carafe-aspp-deeplabv3plus.yaml \
-  pretrained=checkpoints/yolo26s-seg-carafe-aspp-deeplabv3plus_pretrained.pt \
-  data=coco.yaml \
-  epochs=100 \
-  batch=96 \
-  imgsz=640 \
-  device=1,2,3 \
-  workers=8 \
-  amp=True \
-  seed=0 \
-  project=experiments/results \
-  name=A4_3gpu_ddp
+bash experiments/scripts/run_stage.sh A4 1
 ```
 
-Notes specific to the 3-GPU setup:
+which runs, with `CUDA_VISIBLE_DEVICES=1` so the process sees only that card:
 
-- **`workers` is per-GPU.** With `workers=8` on 3 GPUs you get 24 dataloader processes; keep `workers × 3` at or below the host's physical core count (`nproc`). Too many workers starves the GPUs rather than feeding them.
-- **Ultralytics spawns DDP itself.** Run the plain `yolo` command above — do not wrap it in `torchrun` or `python -m torch.distributed.run`, which produces nested process groups.
-- **Scale the learning rate with the global batch.** `lr0` defaults are tuned around batch 64; tripling the batch usually wants a proportionally higher `lr0` plus warmup. Try `lr0=0.01 warmup_epochs=5` if loss plateaus early.
-- **Rank 0 is the first device in the list, not GPU 0.** With `device=1,2,3` the rank-0 process runs on physical GPU 1. Checkpoints, plots, and `results.csv` are written once under `experiments/results/<name>/`, not three times.
-- **A killed run can leak GPU memory.** If a DDP run dies uncleanly, clear orphans before relaunching.
+```bash
+yolo segment train   model=experiments/configs/yolo26s-seg-carafe-aspp-deeplabv3plus.yaml   pretrained=checkpoints/yolo26s-seg-carafe-aspp-deeplabv3plus_pretrained.pt   data=coco.yaml epochs=100 batch=32 imgsz=640   device=0 workers=6 amp=True seed=0   project=experiments/results name=A4_1gpu
+```
 
-### 6.4 Running the Full A0-A4 Ablation (one stage per GPU)
+Notes for single-GPU stages:
 
-This branch runs the five stages **concurrently, one per GPU**, instead of five sequential DDP runs. Stages are dealt round-robin onto the GPUs and each GPU works its own queue in series:
+- **No DDP anywhere.** One process, one GPU, `device=0` inside the pinned environment. Nothing to wrap in `torchrun`, no process group to hang, no rank-0 bookkeeping — and a stage that dies leaves nothing behind for the others to trip over.
+- **`workers` is per stage.** Every terminal you open adds another `WORKERS` dataloader processes on the same host. Three stages at the default 6 is 18; keep the total at or below `nproc`.
+- **`lr0` defaults suit this batch.** They are tuned around batch 64, so at `batch=32` on one GPU the stock values are reasonable. Leave them alone unless you change the batch.
+- **Everything is written once**, under `experiments/results/<stage>_1gpu/`.
+
+### 6.4 Running the Full A0-A4 Ablation (one stage per terminal)
+
+No DDP. Each stage trains on one dedicated GPU, launched by hand in its own terminal, so the stages are fully independent processes: one crashing, OOMing, or being Ctrl-C'd never touches the others.
+
+```bash
+bash experiments/scripts/run_stage.sh <STAGE> <GPU>
+```
+
+**Wave 1** - open three terminals (or three `tmux` windows) and run one each:
+
+```bash
+# terminal 1
+bash experiments/scripts/run_stage.sh A0 1
+
+# terminal 2
+bash experiments/scripts/run_stage.sh A1 2
+
+# terminal 3
+bash experiments/scripts/run_stage.sh A2 3
+```
+
+**Wave 2** - as each finishes, start the next stage in that freed terminal:
+
+```bash
+bash experiments/scripts/run_stage.sh A3 1
+bash experiments/scripts/run_stage.sh A4 2
+```
+
+Each stage is pinned with `CUDA_VISIBLE_DEVICES=<gpu>` and runs with `device=0`, so it cannot touch a card another terminal is using. Output streams to the terminal and is tee'd to `experiments/results/logs/<stage>_1gpu_<timestamp>.log`. Results go to `<stage>_1gpu/`.
+
+Use `tmux` rather than plain SSH sessions, so a dropped connection does not kill a multi-day stage:
+
+```bash
+tmux new -s a0    # then run the stage inside; detach with Ctrl-B D
+tmux attach -t a0
+```
+
+#### Resuming
+
+**Re-run the identical command.** That is the whole procedure:
+
+```bash
+bash experiments/scripts/run_stage.sh A0 1
+```
+
+The script decides what to do from what is on disk:
+
+| State on disk | What happens |
+| :-------------------------------- | :--------------------------------------------- |
+| nothing yet | trains from the warm-start checkpoint |
+| `weights/last.pt`, no `best.pt` | resumes from `last.pt` |
+| `weights/best.pt` present | reports complete and exits 0, changing nothing |
+
+So after a crash, an OOM, a reboot, or a closed laptop, you re-run the same line in each terminal and every stage picks up where it left off. `FORCE=1` retrains a finished stage from scratch.
+
+The banner at the top of each run states which of the three it chose, so you can confirm at a glance:
 
 ```text
-GPU 1: A0 -> A3
-GPU 2: A1 -> A4
-GPU 3: A2
+ mode    resuming from experiments/results/A0_1gpu/weights/last.pt
 ```
 
-Five stages over three GPUs is **two waves**, so the sweep finishes in roughly two stage-times rather than five. The trade is per-stage speed: each stage now has one GPU instead of three, so an individual stage takes about 3x longer than the same stage under DDP. Total throughput wins; time-to-first-result does not. If you need one stage finished as early as possible, use the DDP driver on the `rtx6000` branch.
+Note that `resume` restores the batch size, epoch count, and device from the checkpoint and ignores the environment overrides — that is what keeps a resumed stage comparable with the others. To change those, start a fresh run with `FORCE=1`.
+
+#### Settings
+
+Override by prefixing the command, e.g. `BATCH=64 bash experiments/scripts/run_stage.sh A4 2`:
+
+`BATCH=32` (per stage - it owns one GPU), `EPOCHS=100`, `IMGSZ=640`, `WORKERS=6`, `SEED=0`, `DATA=coco.yaml`, `PROJECT=experiments/results`, `FORCE=0`, `PROBE=0`, `PROBE_FRACTION=0.01`.
+
+**`batch` is per stage, not global.** `BATCH=32` means 32 images on that one card - the same per-GPU load as a DDP `batch=96` split three ways. Do not carry a DDP number over.
+
+**Keep every setting identical across the five stages.** The ablation is only meaningful if `batch`, `imgsz`, `epochs`, and `seed` match; the only things that should differ are `model` and `pretrained`.
+
+#### Measure the cost first
+
+`PROBE=1` trains one epoch on 1% of the data and reports the extrapolated cost, in a few minutes instead of days:
 
 ```bash
-bash experiments/scripts/run_ablation.sh
+PROBE=1 bash experiments/scripts/run_stage.sh A4 1
 ```
 
-Each stage is pinned with `CUDA_VISIBLE_DEVICES=<gpu>` and runs with `device=0`, so a stage physically cannot touch a GPU another stage is training on. Results go to `<stage>_1gpu/` — distinct from the DDP branch's `<stage>_3gpu_ddp/`, so both sets can coexist.
-
-**`batch` is per stage, not global.** Each stage owns one GPU, so `BATCH=32` means 32 images on that one card — the same per-GPU load as `batch=96` split three ways under DDP. Do not carry the DDP number over.
-
-Common variations:
-
-```bash
-bash experiments/scripts/run_ablation.sh A3 A4        # only selected stages
-DRY_RUN=1 bash experiments/scripts/run_ablation.sh    # print the GPU plan, run nothing
-PROBE=1 bash experiments/scripts/run_ablation.sh      # measure time per stage
-GPUS=1,2 bash experiments/scripts/run_ablation.sh     # two GPUs -> three waves
-BATCH=64 bash experiments/scripts/run_ablation.sh     # if one card has headroom
+```text
+A4 measured: 42s probe -> 70.0 min/epoch -> 4.86 days for 100 epochs on one GPU
 ```
 
-Settings, overridable by prefixing the command: `GPUS=1,2,3`, `BATCH=32` (per stage), `EPOCHS=100`, `IMGSZ=640`, `WORKERS=6` (per stage), `SEED=0`, `DATA=coco.yaml`, `PROJECT=experiments/results`, `PROBE=0`, `PROBE_FRACTION=0.01`.
+Probe it on A0 and A4 - the lightest and heaviest stages - to bracket the sweep. Run the probes in the three terminals simultaneously if you want numbers that include the I/O contention three concurrent stages actually cause.
 
-**Watch the host, not just the GPUs.** Three concurrent stages multiply every host-side cost:
+#### Host load
 
-- **Dataloader processes**: `WORKERS x concurrent stages`. The default 6 gives 18 — keep that at or below `nproc`. This is why the default is lower here than the DDP driver's 8.
-- **Disk**: three independent readers over the same 20 GB of COCO. On a spinning disk or network mount this, not the GPUs, will set your epoch time. `cache=ram` helps only if the host has room for three copies.
-- **RAM**: each stage holds its own dataset index and worker pool.
+Three concurrent stages multiply every host-side cost:
 
-**Measure before committing.** `PROBE=1` runs all stages concurrently on 1% of the data, so the reported numbers already include the I/O contention the real sweep will see — more representative than the DDP branch's serial probe:
-
-```bash
-PROBE=1 bash experiments/scripts/run_ablation.sh
-```
-
-It reports per-stage times and converts them to wall time using the wave count, since the sweep finishes with the busiest GPU rather than the sum of all stages.
-
-**Re-entrancy.** Same rules as the DDP driver: a stage with `weights/best.pt` is skipped, a stage with only `weights/last.pt` is resumed, and `FORCE=1` retrains from scratch. Failures are collected per stage rather than aborting the sweep, and the script exits non-zero naming them. Re-running after a crash picks up where it left off.
-
-Launch detached — this is still a multi-day run:
-
-```bash
-tmux new -s ablation 'bash experiments/scripts/run_ablation.sh'
-```
-
-`seed=0` makes the runs reproducible. Keep `batch` identical across all five stages — changing it mid-ablation invalidates the comparison.
+- **Dataloader processes**: `WORKERS` per stage, so 6 x 3 = 18. Keep the total at or below `nproc`.
+- **Disk**: three independent readers over the same 20 GB of COCO. On a network mount or spinning disk this, not the GPUs, sets your epoch time.
+- **Shared memory**: see §6.6 - this is the one most likely to kill a long run.
 
 ### 6.5 Monitoring
 
@@ -460,6 +480,43 @@ tail -f experiments/results/A4_3gpu_ddp/results.csv     # per-epoch metrics
 ```
 
 If GPU utilization sits well below ~90%, the dataloader is the bottleneck — raise `workers`, or add `cache=ram` if the host has enough spare RAM (COCO-Seg at 640 px needs roughly 30+ GB).
+
+### 6.6 Shared Memory (/dev/shm)
+
+PyTorch stages every in-flight batch in `/dev/shm`. Containers commonly cap it at 64MB, which one 640px segmentation batch exceeds on its own. The symptom is not a clean startup failure but a crash partway into training:
+
+```text
+ERROR: Unexpected bus error encountered in worker. This might be caused by insufficient shared memory (shm).
+DataLoader worker (pid 12345) is killed by signal: Bus error.
+```
+
+Check what you have:
+
+```bash
+df -h /dev/shm
+```
+
+**If you can change it**, give it room — roughly 1 GB per dataloader worker, so 16 GB for three stages at `WORKERS=6`:
+
+```bash
+docker run --shm-size=16g ...     # or --ipc=host
+sudo mount -o remount,size=16G /dev/shm
+```
+
+**If you cannot** — no root, no control over how the container starts — this branch handles it for you. `build_dataloader` checks `/dev/shm` before spawning workers and, when it is below 1 GB, switches PyTorch to its `file_system` sharing strategy, which passes tensors through ordinary temporary files instead of shared memory. You will see:
+
+```text
+WARNING /dev/shm has only 68MB available, below the 1024MB needed by 6 dataloader workers.
+Switching torch tensor sharing to 'file_system' to avoid worker 'Bus error' crashes.
+```
+
+Training then proceeds normally. Two caveats with that strategy:
+
+- It consumes **file descriptors** rather than shared memory. If workers still fail, raise the limit — this needs no root, up to the hard limit: `ulimit -n 65535`. Check the ceiling with `ulimit -Hn`.
+- A hard-killed process can leave stray files in `/tmp`. Clear them between runs if `/tmp` fills.
+
+Lowering `WORKERS` reduces the pressure but costs throughput, and on a small `/dev/shm` even `WORKERS=2` can fail — the fallback above is the reliable fix.
+
 
 ---
 
@@ -471,22 +528,23 @@ from ultralytics import YOLO
 # Load model with warm-started pretrained weights
 model = YOLO("checkpoints/yolo26s-seg-carafe-aspp-deeplabv3plus_pretrained.pt")
 
-# Train model on 3x RTX 6000
+# Train one stage on one GPU. Set CUDA_VISIBLE_DEVICES=<gpu> before launching
+# python so this process sees only that card, then address it as device=0.
 results = model.train(
     data="coco.yaml",
     epochs=100,
-    batch=96,  # global batch, 32 images/GPU across 3 GPUs; must be divisible by 3
+    batch=32,  # this stage owns one GPU, so batch is what fits on that card
     imgsz=640,
-    device="1,2,3",
-    workers=8,  # per-GPU; 8 x 3 = 24 dataloader processes
+    device=0,
+    workers=6,
     amp=True,
     seed=0,
     project="experiments/results",
-    name="A4_training_run",
+    name="A4_1gpu",
 )
 ```
 
-Launch this as a script (`python train.py`), not from an interactive interpreter or notebook — Ultralytics re-executes the entry file in each DDP worker.
+Prefer `run_stage.sh` (§6.4) for real runs — it handles GPU pinning, logging, and resume. Use the Python API only for one-off experiments.
 
 ---
 
@@ -498,7 +556,7 @@ Launch this as a script (`python train.py`), not from an interactive interpreter
 uv run --no-sync yolo segment train resume model=experiments/results/A4_3gpu_ddp/weights/last.pt
 ```
 
-The resumed run reuses the saved `device=1,2,3` and `batch`, so it re-forms the same 3-GPU DDP group. To change the batch size or GPU count you must start a fresh run rather than resume.
+The resumed run reuses the saved `batch` and settings from the checkpoint, which is what keeps a resumed stage comparable with the others. To change them, start a fresh run with `FORCE=1`.
 
 A 100-epoch COCO-Seg run takes well over a day, so launch it detached under `tmux` (preferred — you can reattach to a live console) or `nohup`:
 
