@@ -92,7 +92,7 @@ In Ultralytics, the standard dataset configuration [`ultralytics/cfg/datasets/co
     - `val2017.zip` (~1 GB, 5,000 images)
 - **Segmentation Label Archive**:
     - `coco2017labels-segments.zip` (~30 MB, polygon coordinate text files for each image)
-- **Total Uncompressed Disk Space**: **~25 GB**
+- **Disk space required**: **~45 GB**. The extracted dataset is ~25 GB, but Ultralytics downloads with `delete=False`, so the ~20 GB of `.zip` archives are kept alongside it. They can be removed by hand once extraction succeeds (see §3.1).
 
 ---
 
@@ -183,6 +183,52 @@ To debug training without waiting for a 25 GB download:
 
 - `data=coco8-seg.yaml` (8 images, ~1 MB)
 - `data=coco128-seg.yaml` (128 images, ~7 MB)
+
+
+### 3.1 If the Dataset Is Missing
+
+```text
+ls: cannot access '/workspace/coco_dataset/coco/val2017.txt': No such file or directory
+```
+
+`val2017.txt` ships inside the labels archive, so this means the download has not run (or ran somewhere else). Check where Ultralytics is actually pointing first — a settings file written before `datasets_dir` was changed keeps its old value, because the schema migration preserves existing settings:
+
+```bash
+uv run --no-sync yolo settings | grep datasets_dir
+```
+
+If it is not `/workspace/coco_dataset`, set it explicitly:
+
+```bash
+uv run --no-sync yolo settings datasets_dir=/workspace/coco_dataset
+```
+
+Then confirm the directory is writeable by the training user and has ~45 GB free:
+
+```bash
+mkdir -p /workspace/coco_dataset && df -h /workspace/coco_dataset
+```
+
+Now download (~20 GB over the network, expect 20-60 minutes):
+
+```bash
+uv run --no-sync python -c "from ultralytics.data.utils import check_det_dataset; check_det_dataset('coco.yaml', autodownload=True)"
+```
+
+The expected result — note the labels archive is what creates the `.txt` index files:
+
+```bash
+ls /workspace/coco_dataset/coco/
+# images/  labels/  train2017.txt  val2017.txt  LICENSE  README.txt
+```
+
+Once `experiments/scripts/check_coco.py` passes (§4), reclaim ~20 GB by deleting the archives that Ultralytics leaves behind:
+
+```bash
+rm -f /workspace/coco_dataset/coco/images/*.zip /workspace/coco_dataset/*.zip
+```
+
+To train immediately without waiting for the download, use `data=coco8-seg.yaml` — it fetches in seconds and exercises the identical code path.
 
 ---
 
