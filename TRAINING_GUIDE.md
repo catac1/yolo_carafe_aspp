@@ -2,7 +2,8 @@
 
 This guide covers how to download and verify the **COCO 2017 Instance Segmentation (COCO-Seg)** dataset, and how to train the custom **YOLO26s-Seg** models (Stages A0 through A4).
 
-**Target environment:** Linux, NVIDIA RTX 6000 GPUs, headless (no display server). The package depends on `opencv-python-headless`, so no X11/Qt libraries are required.
+**Target environment:** single Linux node with **3× NVIDIA RTX 6000** GPUs, headless (no display server), Python 3.12.
+The package depends on `opencv-python-headless`, so no X11/Qt libraries are required, and training runs entirely on PyTorch `.pt` weights — no export toolchains are installed.
 
 ---
 
@@ -138,9 +139,29 @@ This checks:
 
 ## 6. How to Train the Model
 
-### 6.1 Quick Smoke Test
+All commands below assume the plan target: **3× RTX 6000, single node, Linux**.
 
-Verify the pipeline end to end on 8 images before committing a GPU to a full run:
+### 6.1 Pick the Batch Size for Your Card
+
+DDP splits the `batch` argument across GPUs, so **the global batch must be divisible by 3**. Ultralytics reports the per-GPU split at startup — confirm it matches the table before letting a 100-epoch run proceed.
+
+| Card                       | VRAM  | Per-GPU batch | `batch` (3 GPUs) |
+| :------------------------- | :---- | :------------ | :--------------- |
+| RTX 6000 (Turing)          | 24 GB | 16            | `48`             |
+| RTX 6000 Ada               | 48 GB | 32            | `96`             |
+| RTX PRO 6000 Blackwell     | 96 GB | 64            | `192`            |
+
+These are starting points for YOLO26s-Seg at `imgsz=640` with `amp=True`. Segmentation masks make memory scale worse than detection, and the A4 DeepLabV3+ decoder is the heaviest of the five stages — if A4 hits CUDA OOM, drop one row and keep every stage on the same batch size so the ablation stays comparable.
+
+Confirm what you actually have before choosing:
+
+```bash
+nvidia-smi --query-gpu=index,name,memory.total,driver_version --format=csv
+```
+
+### 6.2 Quick Smoke Test
+
+Verify the pipeline end to end on 8 images before committing 3 GPUs to a long run. Use a single GPU here — DDP startup noise only obscures real errors:
 
 ```bash
 uv run --no-sync yolo segment train \
@@ -155,27 +176,24 @@ uv run --no-sync yolo segment train \
   name=A4_smoke_test
 ```
 
-### 6.2 Single-GPU Full Training (1× RTX 6000)
+Then smoke-test DDP itself across all three GPUs, still on 8 images:
 
 ```bash
 uv run --no-sync yolo segment train \
   model=checkpoints/yolo26s-seg-carafe-aspp-deeplabv3plus_pretrained.pt \
-  data=coco.yaml \
-  epochs=100 \
-  batch=64 \
+  data=coco8-seg.yaml \
+  epochs=1 \
+  batch=3 \
   imgsz=640 \
-  device=0 \
-  workers=16 \
+  device=0,1,2 \
   amp=True \
   project=experiments/results \
-  name=A4_single_gpu
+  name=A4_ddp_smoke
 ```
 
-`batch=64` targets a 48 GB RTX 6000 Ada. On a 96 GB RTX PRO 6000 Blackwell try `batch=128`; if you hit CUDA OOM, halve it. `batch=-1` lets Ultralytics auto-pick a batch size for ~60% VRAM utilization.
+### 6.3 Full Training (3× RTX 6000 DDP)
 
-### 6.3 Multi-GPU DDP Training (3× RTX 6000)
-
-Keep the global batch size divisible by the GPU count (`batch=96` = 32 images/GPU):
+`batch=96` below assumes 48 GB cards — substitute your row from §6.1:
 
 ```bash
 uv run --no-sync yolo segment train \
@@ -188,11 +206,49 @@ uv run --no-sync yolo segment train \
   device=0,1,2 \
   workers=8 \
   amp=True \
+  seed=0 \
   project=experiments/results \
   name=A4_3gpu_ddp
 ```
 
-`workers` is per-GPU; keep `workers × GPUs` at or below the host's physical core count.
+Notes specific to the 3-GPU setup:
+
+- **`workers` is per-GPU.** With `workers=8` on 3 GPUs you get 24 dataloader processes; keep `workers × 3` at or below the host's physical core count (`nproc`). Too many workers starves the GPUs rather than feeding them.
+- **Ultralytics spawns DDP itself.** Run the plain `yolo` command above — do not wrap it in `torchrun` or `python -m torch.distributed.run`, which produces nested process groups.
+- **Scale the learning rate with the global batch.** `lr0` defaults are tuned around batch 64; tripling the batch usually wants a proportionally higher `lr0` plus warmup. Try `lr0=0.01 warmup_epochs=5` if loss plateaus early.
+- **Only rank 0 writes.** Checkpoints, plots, and `results.csv` appear once under `experiments/results/<name>/`, not three times.
+- **A killed run can leak GPU memory.** If a DDP run dies uncleanly, clear orphans before relaunching.
+
+### 6.4 Running the Full A0–A4 Ablation
+
+The five stages differ only in `model` and `pretrained`. Hold every other argument fixed so the comparison stays clean, and run them in series — three GPUs serve one stage at a time, not one stage per GPU:
+
+```bash
+run_stage() {
+  uv run --no-sync yolo segment train \
+    model="$2" pretrained="$3" \
+    data=coco.yaml epochs=100 batch=96 imgsz=640 \
+    device=0,1,2 workers=8 amp=True seed=0 \
+    project=experiments/results name="$1_3gpu_ddp"
+}
+
+run_stage A0 ultralytics/cfg/models/26/yolo26-seg.yaml checkpoints/yolo26s-seg.pt
+run_stage A1 experiments/configs/yolo26s-seg-carafe.yaml checkpoints/yolo26s-seg-carafe_pretrained.pt
+run_stage A2 experiments/configs/yolo26s-seg-aspp.yaml checkpoints/yolo26s-seg-aspp_pretrained.pt
+run_stage A3 experiments/configs/yolo26s-seg-carafe-aspp.yaml checkpoints/yolo26s-seg-carafe-aspp_pretrained.pt
+run_stage A4 experiments/configs/yolo26s-seg-carafe-aspp-deeplabv3plus.yaml checkpoints/yolo26s-seg-carafe-aspp-deeplabv3plus_pretrained.pt
+```
+
+`seed=0` makes the runs reproducible. Keep `batch` identical across all five stages, including A4 — changing it mid-ablation invalidates the comparison.
+
+### 6.5 Monitoring
+
+```bash
+watch -n 5 nvidia-smi                                   # utilization and VRAM headroom
+tail -f experiments/results/A4_3gpu_ddp/results.csv     # per-epoch metrics
+```
+
+If GPU utilization sits well below ~90%, the dataloader is the bottleneck — raise `workers`, or add `cache=ram` if the host has enough spare RAM (COCO-Seg at 640 px needs roughly 30+ GB).
 
 ---
 
@@ -204,30 +260,48 @@ from ultralytics import YOLO
 # Load model with warm-started pretrained weights
 model = YOLO("checkpoints/yolo26s-seg-carafe-aspp-deeplabv3plus_pretrained.pt")
 
-# Train model
+# Train model on 3x RTX 6000
 results = model.train(
     data="coco.yaml",
     epochs=100,
-    batch=96,  # 32 images/GPU on 3 GPUs, or 64 for a single RTX 6000
+    batch=96,  # global batch, 32 images/GPU across 3 GPUs; must be divisible by 3
     imgsz=640,
-    device="0,1,2",  # or device=0 for single GPU
-    workers=8,
+    device="0,1,2",
+    workers=8,  # per-GPU; 8 x 3 = 24 dataloader processes
     amp=True,
+    seed=0,
     project="experiments/results",
     name="A4_training_run",
 )
 ```
 
+Launch this as a script (`python train.py`), not from an interactive interpreter or notebook — Ultralytics re-executes the entry file in each DDP worker.
+
 ---
 
 ## 8. Resuming Interrupted Runs
+
+`resume` restores the optimizer state, epoch counter, and the full argument set from the checkpoint, so no other flags are needed — and none are honored:
 
 ```bash
 uv run --no-sync yolo segment train resume model=experiments/results/A4_3gpu_ddp/weights/last.pt
 ```
 
-For long unattended runs, launch under `nohup` or `tmux` so an SSH disconnect does not kill training:
+The resumed run reuses the saved `device=0,1,2` and `batch`, so it re-forms the same 3-GPU DDP group. To change the batch size or GPU count you must start a fresh run rather than resume.
+
+A 100-epoch COCO-Seg run takes well over a day, so launch it detached under `tmux` (preferred — you can reattach to a live console) or `nohup`:
+
+```bash
+tmux new -s a4 'uv run --no-sync yolo segment train ... 2>&1 | tee train.log'
+# detach with Ctrl-B D, reattach with: tmux attach -t a4
+```
 
 ```bash
 nohup uv run --no-sync yolo segment train ... > train.log 2>&1 &
+```
+
+If a run dies from OOM partway through, resume from `last.pt` only after confirming no orphaned processes still hold GPU memory:
+
+```bash
+nvidia-smi --query-compute-apps=pid,used_memory --format=csv
 ```
