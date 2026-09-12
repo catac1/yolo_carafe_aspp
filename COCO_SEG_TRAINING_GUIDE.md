@@ -20,7 +20,9 @@ In Ultralytics, the standard dataset configuration [`ultralytics/cfg/datasets/co
 ## 2. Dataset Storage Location & Customization
 
 ### Default Download Location
+
 When you run **Option B** (`check_det_dataset('coco.yaml', autodownload=True)`), Ultralytics checks the global `datasets_dir` configuration setting. On your machine, it downloads by default to:
+
 ```text
 C:\Users\kchpr\Team2\datasets\coco\
 ├── images\
@@ -38,19 +40,25 @@ C:\Users\kchpr\Team2\datasets\coco\
 You can customize where the dataset is downloaded using any of the following 3 methods:
 
 #### Method 1: Change Ultralytics Global Setting (Recommended)
+
 - **Via Python:**
+
   ```python
   from ultralytics import settings
+
   settings.update({"datasets_dir": "E:/custom_datasets"})
   ```
+
 - **Via CLI:**
   ```bash
   uv run --no-sync yolo settings datasets_dir="E:/custom_datasets"
   ```
-*Result:* Option B will download to `E:\custom_datasets\coco`.
+  _Result:_ Option B will download to `E:\custom_datasets\coco`.
 
 #### Method 2: Custom Location in Python Script
+
 You can set the location dynamically right before triggering Option B:
+
 ```python
 from ultralytics import settings
 from ultralytics.data.utils import check_det_dataset
@@ -63,13 +71,16 @@ check_det_dataset("coco.yaml", autodownload=True)
 ```
 
 #### Method 3: Custom YAML with Absolute Path
+
 Create a YAML file (e.g. `experiments/configs/coco_custom.yaml`) specifying an absolute path:
+
 ```yaml
-path: E:/custom_datasets/coco  # Absolute root path
+path: E:/custom_datasets/coco # Absolute root path
 train: train2017.txt
 val: val2017.txt
 ...
 ```
+
 Because `path` is absolute, Ultralytics ignores `datasets_dir` and downloads directly into `E:/custom_datasets/coco`.
 
 ---
@@ -79,19 +90,25 @@ Because `path` is absolute, Ultralytics ignores `datasets_dir` and downloads dir
 Choose the method best suited for your workflow:
 
 ### Option A: Auto-Download via Validation (Recommended)
+
 Running validation triggers Ultralytics to check for existing files; if missing, it downloads, unzips, and indexes the full COCO-Seg dataset automatically:
+
 ```bash
 uv run --no-sync yolo segment val model=checkpoints/yolo26s-seg.pt data=coco.yaml imgsz=640 device=0
 ```
 
 ### Option B: Programmatic Download via Python
+
 Download and extract the dataset without running inference:
+
 ```bash
 uv run --no-sync python -c "from ultralytics.data.utils import check_det_dataset; check_det_dataset('coco.yaml', autodownload=True)"
 ```
 
 ### Option C: Instant Testing Subsets (Zero Wait)
+
 If you want to debug or test training immediately without waiting for a 25 GB download, use the pre-packaged mini subsets already available in `datasets_dir`:
+
 - `data=coco8-seg.yaml` (8 images, ~1 MB)
 - `data=coco128-seg.yaml` (128 images, ~7 MB)
 
@@ -106,6 +123,7 @@ uv run --no-sync python experiments/scripts/check_coco.py --data coco.yaml --sam
 ```
 
 This checks:
+
 - Image counts (~118,287 train, ~5,000 val)
 - Corresponding `.txt` polygon label existence
 - Normalized coordinate bounds ($0.0 \le x, y \le 1.0$)
@@ -117,12 +135,12 @@ This checks:
 
 Five model stages are ready in this repository:
 
-| Stage | Model Description | Architecture Config YAML | Pretrained Weights Checkpoint |
-| :--- | :--- | :--- | :--- |
-| **A0** | Baseline YOLO26s-Seg | `ultralytics/cfg/models/26/yolo26-seg.yaml` | [`checkpoints/yolo26s-seg.pt`](file:///E:/project4/yolo_carafe_aspp/checkpoints/yolo26s-seg.pt) |
-| **A1** | CARAFE Upsampling | [`experiments/configs/yolo26s-seg-carafe.yaml`](file:///E:/project4/yolo_carafe_aspp/experiments/configs/yolo26s-seg-carafe.yaml) | [`checkpoints/yolo26s-seg-carafe_pretrained.pt`](file:///E:/project4/yolo_carafe_aspp/checkpoints/yolo26s-seg-carafe_pretrained.pt) |
-| **A2** | ASPP Context Block | [`experiments/configs/yolo26s-seg-aspp.yaml`](file:///E:/project4/yolo_carafe_aspp/experiments/configs/yolo26s-seg-aspp.yaml) | [`checkpoints/yolo26s-seg-aspp_pretrained.pt`](file:///E:/project4/yolo_carafe_aspp/checkpoints/yolo26s-seg-aspp_pretrained.pt) |
-| **A3** | CARAFE + ASPP | [`experiments/configs/yolo26s-seg-carafe-aspp.yaml`](file:///E:/project4/yolo_carafe_aspp/experiments/configs/yolo26s-seg-carafe-aspp.yaml) | [`checkpoints/yolo26s-seg-carafe-aspp_pretrained.pt`](file:///E:/project4/yolo_carafe_aspp/checkpoints/yolo26s-seg-carafe-aspp_pretrained.pt) |
+| Stage  | Model Description                                          | Architecture Config YAML                                                                                                                                                | Pretrained Weights Checkpoint                                                                                                                                             |
+| :----- | :--------------------------------------------------------- | :---------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **A0** | Baseline YOLO26s-Seg                                       | `ultralytics/cfg/models/26/yolo26-seg.yaml`                                                                                                                             | [`checkpoints/yolo26s-seg.pt`](file:///E:/project4/yolo_carafe_aspp/checkpoints/yolo26s-seg.pt)                                                                           |
+| **A1** | CARAFE Upsampling                                          | [`experiments/configs/yolo26s-seg-carafe.yaml`](file:///E:/project4/yolo_carafe_aspp/experiments/configs/yolo26s-seg-carafe.yaml)                                       | [`checkpoints/yolo26s-seg-carafe_pretrained.pt`](file:///E:/project4/yolo_carafe_aspp/checkpoints/yolo26s-seg-carafe_pretrained.pt)                                       |
+| **A2** | ASPP Context Block                                         | [`experiments/configs/yolo26s-seg-aspp.yaml`](file:///E:/project4/yolo_carafe_aspp/experiments/configs/yolo26s-seg-aspp.yaml)                                           | [`checkpoints/yolo26s-seg-aspp_pretrained.pt`](file:///E:/project4/yolo_carafe_aspp/checkpoints/yolo26s-seg-aspp_pretrained.pt)                                           |
+| **A3** | CARAFE + ASPP                                              | [`experiments/configs/yolo26s-seg-carafe-aspp.yaml`](file:///E:/project4/yolo_carafe_aspp/experiments/configs/yolo26s-seg-carafe-aspp.yaml)                             | [`checkpoints/yolo26s-seg-carafe-aspp_pretrained.pt`](file:///E:/project4/yolo_carafe_aspp/checkpoints/yolo26s-seg-carafe-aspp_pretrained.pt)                             |
 | **A4** | **Full Architecture** (CARAFE + ASPP + DeepLabV3+ Decoder) | [`experiments/configs/yolo26s-seg-carafe-aspp-deeplabv3plus.yaml`](file:///E:/project4/yolo_carafe_aspp/experiments/configs/yolo26s-seg-carafe-aspp-deeplabv3plus.yaml) | [`checkpoints/yolo26s-seg-carafe-aspp-deeplabv3plus_pretrained.pt`](file:///E:/project4/yolo_carafe_aspp/checkpoints/yolo26s-seg-carafe-aspp-deeplabv3plus_pretrained.pt) |
 
 ---
@@ -130,7 +148,9 @@ Five model stages are ready in this repository:
 ## 6. How to Train the Model
 
 ### 6.1 Quick Smoke Test (Local GPU Verification)
+
 For local testing (e.g. Quadro P2200 5GB VRAM), run a 1-epoch test on `coco8-seg.yaml` or a 1% fraction of COCO:
+
 ```bash
 uv run --no-sync yolo segment train \
   model=checkpoints/yolo26s-seg-carafe-aspp-deeplabv3plus_pretrained.pt \
@@ -145,6 +165,7 @@ uv run --no-sync yolo segment train \
 ```
 
 ### 6.2 Single-GPU Full Training (e.g. 1× RTX 3090, 24GB VRAM)
+
 ```bash
 uv run --no-sync yolo segment train \
   model=checkpoints/yolo26s-seg-carafe-aspp-deeplabv3plus_pretrained.pt \
@@ -160,7 +181,9 @@ uv run --no-sync yolo segment train \
 ```
 
 ### 6.3 Multi-GPU 3-GPU DDP Training (Plan Target: 3× RTX 3090)
+
 As specified in the experiment plan, use a global batch size divisible by 3 (`batch=24` = 8 images/GPU):
+
 ```bash
 uv run --no-sync yolo segment train \
   model=experiments/configs/yolo26s-seg-carafe-aspp-deeplabv3plus.yaml \
@@ -192,9 +215,9 @@ model = YOLO("checkpoints/yolo26s-seg-carafe-aspp-deeplabv3plus_pretrained.pt")
 results = model.train(
     data="coco.yaml",
     epochs=100,
-    batch=24,           # 8 images/GPU on 3 GPUs, or 16 for single 24GB GPU
+    batch=24,  # 8 images/GPU on 3 GPUs, or 16 for single 24GB GPU
     imgsz=640,
-    device="0,1,2",     # or device=0 for single GPU
+    device="0,1,2",  # or device=0 for single GPU
     workers=4,
     amp=True,
     project="experiments/results",
@@ -207,6 +230,7 @@ results = model.train(
 ## 8. Resuming Interrupted Runs
 
 If training is paused or interrupted, resume from the latest checkpoint:
+
 ```bash
 uv run --no-sync yolo segment train resume model=experiments/results/A4_3gpu_ddp/weights/last.pt
 ```

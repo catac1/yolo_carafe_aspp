@@ -1,25 +1,23 @@
 # Ultralytics 🚀 AGPL-3.0 License - https://ultralytics.com/license
 """Custom segmentation modules for YOLO26s-Seg experiments including CARAFE and ASPP."""
 
+from __future__ import annotations
+
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
+from torch import nn
 
 from ultralytics.nn.modules.conv import Conv
 from ultralytics.nn.modules.head import Detect, Segment26
 
-__all__ = ["CARAFE", "ASPP", "DeepLabV3PlusProto", "DeepLabV3PlusSegment26"]
+__all__ = ["ASPP", "CARAFE", "DeepLabV3PlusProto", "DeepLabV3PlusSegment26"]
 
 
 class CARAFE(nn.Module):
     """Content-Aware ReAssembly of FEatures (CARAFE) upsampling module.
 
-    CARAFE predicts content-aware reassembly kernels for feature upsampling via a lightweight
-    kernel generating network, then reassembles features in a local region with the predicted kernels.
-
-    Reference:
-        Wang et al., "CARAFE: Content-Aware ReAssembly of FEatures", ICCV 2019.
-        https://arxiv.org/abs/1905.02188
+    CARAFE predicts content-aware reassembly kernels for feature upsampling via a lightweight kernel generating network,
+    then reassembles features in a local region with the predicted kernels.
 
     Attributes:
         scale (int): Upsampling ratio (default: 2).
@@ -28,6 +26,10 @@ class CARAFE(nn.Module):
         c_mid (int): Channels after channel compression.
         compress (Conv): 1x1 convolution for channel compression.
         kernel_predictor (nn.Conv2d): Convolution predicting reassembly kernels.
+
+    References:
+        Wang et al., "CARAFE: Content-Aware ReAssembly of FEatures", ICCV 2019.
+        https://arxiv.org/abs/1905.02188
     """
 
     def __init__(
@@ -133,7 +135,7 @@ class ASPP(nn.Module):
     5. Global average pooling branch with 1x1 conv and bilinear interpolation
     Followed by concatenation of all branches and a 1x1 projection back to the target channel dimension.
 
-    Reference:
+    References:
         Chen et al., "Encoder-Decoder with Atrous Separable Convolution for Semantic Image Segmentation", ECCV 2018.
         https://arxiv.org/abs/1802.02611
     """
@@ -141,9 +143,9 @@ class ASPP(nn.Module):
     def __init__(
         self,
         c1: int,
-        c2: int = None,
+        c2: int | None = None,
         rates: tuple = (3, 6, 9),
-        c_mid: int = None,
+        c_mid: int | None = None,
     ):
         """Initializes the ASPP module.
 
@@ -277,7 +279,7 @@ class DeepLabV3PlusSegment26(Segment26):
     Takes [P2, P3, P4, P5] features:
     - P2 (stride 4) is used for low-level boundary refinement in DeepLabV3PlusProto.
     - P3, P4, P5 (strides 8, 16, 32) are passed to the 3 detection and mask-coefficient heads,
-      maintaining 100% parameter compatibility with baseline YOLO26s-Seg detection weights.
+    maintaining 100% parameter compatibility with baseline YOLO26s-Seg detection weights.
     """
 
     def __init__(self, nc: int = 80, nm: int = 32, npr: int = 256, reg_max=16, end2end=False, ch: tuple = ()):
@@ -304,5 +306,3 @@ class DeepLabV3PlusSegment26(Segment26):
         if self.training:
             return preds
         return (outputs, proto) if self.export else ((outputs[0], proto), preds)
-
-
