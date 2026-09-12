@@ -15,11 +15,13 @@ from torch import nn
 from ultralytics.nn.autobackend import check_class_names
 from ultralytics.nn.modules import (
     AIFI,
+    ASPP,
     C1,
     C2,
     C2PSA,
     C3,
     C3TR,
+    CARAFE,
     ELAN1,
     OBB,
     OBB26,
@@ -46,6 +48,7 @@ from ultralytics.nn.modules import (
     Conv,
     Conv2,
     ConvTranspose,
+    DeepLabV3PlusSegment26,
     Depth,
     Detect,
     DWConv,
@@ -76,9 +79,6 @@ from ultralytics.nn.modules import (
     YOLOESegment,
     YOLOESegment26,
     v10Detect,
-    ASPP,
-    CARAFE,
-    DeepLabV3PlusSegment26,
 )
 from ultralytics.utils import (
     DEFAULT_CFG_DICT,
@@ -2162,9 +2162,27 @@ def parse_model(d, ch, verbose=True):
             }
         ):
             args.extend([reg_max, end2end, [ch[x] for x in f]])
-            if m is Segment or m is YOLOESegment or m is Segment26 or m is YOLOESegment26 or m is DeepLabV3PlusSegment26:
+            if (
+                m is Segment
+                or m is YOLOESegment
+                or m is Segment26
+                or m is YOLOESegment26
+                or m is DeepLabV3PlusSegment26
+            ):
                 args[2] = make_divisible(min(args[2], max_channels) * width, 8)
-            if m in {Detect, YOLOEDetect, Segment, Segment26, DeepLabV3PlusSegment26, YOLOESegment, YOLOESegment26, Pose, Pose26, OBB, OBB26}:
+            if m in {
+                Detect,
+                YOLOEDetect,
+                Segment,
+                Segment26,
+                DeepLabV3PlusSegment26,
+                YOLOESegment,
+                YOLOESegment26,
+                Pose,
+                Pose26,
+                OBB,
+                OBB26,
+            }:
                 m.legacy = legacy
         elif m is Depth:
             args = [*args[:1], [ch[x] for x in f]]  # c_mid, ch tuple; drops the legacy mode arg old checkpoints store
