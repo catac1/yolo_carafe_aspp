@@ -6,17 +6,18 @@
 
 ## Transfer Statistics
 
-| Metric | Value |
-|---|---|
-| **Total Parameters** | 13,901,136 |
-| **Transferred Parameters** | 11,546,542 (83.06%) |
-| **Newly Initialized Parameters** | 2,397,904 (16.94%) |
-| **Matched Tensors** | 844 |
-| **Missing Tensors (Custom Initialized)** | 52 |
-| **Shape Mismatch Tensors** | 0 |
-| **Unused Baseline Tensors** | 604 |
+| Metric                                   | Value               |
+| ---------------------------------------- | ------------------- |
+| **Total Parameters**                     | 13,901,136          |
+| **Transferred Parameters**               | 11,546,542 (83.06%) |
+| **Newly Initialized Parameters**         | 2,397,904 (16.94%)  |
+| **Matched Tensors**                      | 844                 |
+| **Missing Tensors (Custom Initialized)** | 52                  |
+| **Shape Mismatch Tensors**               | 0                   |
+| **Unused Baseline Tensors**              | 604                 |
 
 ## Newly Initialized Layers (CARAFE / Custom)
+
 ```text
 model.11.branch1.conv.weight
 model.11.branch1.bn.weight
@@ -72,6 +73,7 @@ model.15.compress.bn.num_batches_tracked
 ```
 
 ## Shape Mismatches
+
 ```text
 None
 ```

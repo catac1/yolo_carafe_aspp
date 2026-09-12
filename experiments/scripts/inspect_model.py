@@ -2,7 +2,7 @@
 """Model inspection script for YOLO26 segmentation experiments (A0-A4)."""
 
 import argparse
-import sys
+
 import torch
 
 from ultralytics import YOLO
@@ -39,7 +39,9 @@ def inspect_model(config_path: str, imgsz: int = 640):
     # In eval mode, SegmentationModel returns (preds, proto)
     if isinstance(results, (tuple, list)):
         preds, proto = results[0], results[1]
-        print(f"forward output valid: preds shape = {preds.shape if hasattr(preds, 'shape') else len(preds)}, proto shape = {proto.shape if hasattr(proto, 'shape') else None}")
+        print(
+            f"forward output valid: preds shape = {preds.shape if hasattr(preds, 'shape') else len(preds)}, proto shape = {proto.shape if hasattr(proto, 'shape') else None}"
+        )
     else:
         print(f"forward output valid: {type(results)}")
 
