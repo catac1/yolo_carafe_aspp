@@ -39,6 +39,8 @@ def check_coco_integrity(data_cfg: str = "coco.yaml", num_samples: int = 20):
         samples_checked = 0
         for img_file in img_files[:num_samples]:
             img_p = Path(img_file)
+            if not img_p.is_absolute():
+                img_p = Path(data["path"]) / img_p
             # Corresponding label path: replace /images/ with /labels/ and .jpg with .txt
             label_p = Path(str(img_p.parent).replace("images", "labels")) / f"{img_p.stem}.txt"
             if not label_p.exists():
