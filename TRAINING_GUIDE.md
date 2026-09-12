@@ -2,7 +2,7 @@
 
 This guide covers how to download and verify the **COCO 2017 Instance Segmentation (COCO-Seg)** dataset, and how to train the custom **YOLO26s-Seg** models (Stages A0 through A4).
 
-**Target environment:** single Linux node with **3× NVIDIA RTX 6000** GPUs, headless (no display server), Python 3.12.
+**Target environment:** single headless Linux node, Python 3.12, training on **3× NVIDIA RTX 6000** (devices **1, 2, 3** — GPU 0 is occupied and OOMs, see §6.0).
 The package depends on `opencv-python-headless`, so no X11/Qt libraries are required, and training runs entirely on PyTorch `.pt` weights — no export toolchains are installed.
 
 ### First run on a new machine, in order
@@ -52,11 +52,12 @@ print('cv2        ', cv2.__version__)
 print('torch      ', torch.__version__, 'cuda', torch.version.cuda)
 print('GPUs       ', torch.cuda.device_count())
 for i in range(torch.cuda.device_count()):
-    print('  ', i, torch.cuda.get_device_name(i))
+    free, total = torch.cuda.mem_get_info(i)
+    print(f'   {i} {torch.cuda.get_device_name(i)}  {free / 1e9:.1f}/{total / 1e9:.1f} GB free')
 "
 ```
 
-Expect three RTX 6000 entries before attempting any DDP run.
+Expect to see the RTX 6000s listed. Devices 1, 2 and 3 are the training GPUs; GPU 0 is excluded (§6.0).
 
 ### CUDA build of PyTorch
 
@@ -167,7 +168,7 @@ Because `path` is absolute, Ultralytics ignores `datasets_dir` and downloads dir
 ### Option A: Auto-Download via Validation (Recommended)
 
 ```bash
-uv run --no-sync yolo segment val model=checkpoints/yolo26s-seg.pt data=coco.yaml imgsz=640 device=0
+uv run --no-sync yolo segment val model=checkpoints/yolo26s-seg.pt data=coco.yaml imgsz=640 device=1
 ```
 
 ### Option B: Programmatic Download via Python
@@ -243,7 +244,32 @@ Alternatively, copy an existing `checkpoints/` directory across (~131 MB) with `
 
 ## 6. How to Train the Model
 
-All commands below assume the plan target: **3× RTX 6000, single node, Linux**.
+All commands below assume the plan target: **3× RTX 6000, single node, Linux**, training on **GPUs 1, 2 and 3** — GPU 0 is reserved and will OOM (see §6.0).
+
+### 6.0 Selecting GPUs (skip GPU 0)
+
+GPU 0 on this host is not available for training — it is already occupied and a run placed on it dies with CUDA OOM. Every command in this guide therefore targets **devices 1, 2, 3**.
+
+Confirm what is free before launching; the `memory.used` column should be near zero on 1, 2 and 3:
+
+```bash
+nvidia-smi --query-gpu=index,name,memory.used,memory.total,utilization.gpu --format=csv
+nvidia-smi --query-compute-apps=gpu_uuid,pid,used_memory --format=csv   # what is holding GPU 0
+```
+
+There are two ways to select them, and they differ in how the GPUs are numbered:
+
+```bash
+# A. Ultralytics device argument - indices are PHYSICAL, as nvidia-smi reports them
+yolo segment train ... device=1,2,3
+
+# B. CUDA_VISIBLE_DEVICES - remaps them, so the visible set is renumbered from 0
+CUDA_VISIBLE_DEVICES=1,2,3 yolo segment train ... device=0,1,2
+```
+
+Both run on the same hardware. Do not combine them carelessly: with `CUDA_VISIBLE_DEVICES=1,2,3` set, `device=1,2,3` refers to the *second, third and fourth visible* GPUs — only one of which exists — and the run fails with an invalid device ordinal. This guide uses form A throughout and sets no `CUDA_VISIBLE_DEVICES`.
+
+Form B is the safer choice if anything else on the box might touch GPU 0, because the training process then cannot address it at all.
 
 ### 6.1 Pick the Batch Size for Your Card
 
@@ -274,13 +300,13 @@ uv run --no-sync yolo segment train \
   epochs=1 \
   batch=2 \
   imgsz=640 \
-  device=0 \
+  device=1 \
   amp=True \
   project=experiments/results \
   name=A4_smoke_test
 ```
 
-Then smoke-test DDP itself across all three GPUs, still on 8 images:
+Then smoke-test DDP itself across all three training GPUs, still on 8 images:
 
 ```bash
 uv run --no-sync yolo segment train \
@@ -289,7 +315,7 @@ uv run --no-sync yolo segment train \
   epochs=1 \
   batch=3 \
   imgsz=640 \
-  device=0,1,2 \
+  device=1,2,3 \
   amp=True \
   project=experiments/results \
   name=A4_ddp_smoke
@@ -307,7 +333,7 @@ uv run --no-sync yolo segment train \
   epochs=100 \
   batch=96 \
   imgsz=640 \
-  device=0,1,2 \
+  device=1,2,3 \
   workers=8 \
   amp=True \
   seed=0 \
@@ -320,7 +346,7 @@ Notes specific to the 3-GPU setup:
 - **`workers` is per-GPU.** With `workers=8` on 3 GPUs you get 24 dataloader processes; keep `workers × 3` at or below the host's physical core count (`nproc`). Too many workers starves the GPUs rather than feeding them.
 - **Ultralytics spawns DDP itself.** Run the plain `yolo` command above — do not wrap it in `torchrun` or `python -m torch.distributed.run`, which produces nested process groups.
 - **Scale the learning rate with the global batch.** `lr0` defaults are tuned around batch 64; tripling the batch usually wants a proportionally higher `lr0` plus warmup. Try `lr0=0.01 warmup_epochs=5` if loss plateaus early.
-- **Only rank 0 writes.** Checkpoints, plots, and `results.csv` appear once under `experiments/results/<name>/`, not three times.
+- **Rank 0 is the first device in the list, not GPU 0.** With `device=1,2,3` the rank-0 process runs on physical GPU 1. Checkpoints, plots, and `results.csv` are written once under `experiments/results/<name>/`, not three times.
 - **A killed run can leak GPU memory.** If a DDP run dies uncleanly, clear orphans before relaunching.
 
 ### 6.4 Running the Full A0–A4 Ablation
@@ -332,7 +358,7 @@ run_stage() {
   uv run --no-sync yolo segment train \
     model="$2" pretrained="$3" \
     data=coco.yaml epochs=100 batch=96 imgsz=640 \
-    device=0,1,2 workers=8 amp=True seed=0 \
+    device=1,2,3 workers=8 amp=True seed=0 \
     project=experiments/results name="$1_3gpu_ddp"
 }
 
@@ -348,7 +374,7 @@ run_stage A4 experiments/configs/yolo26s-seg-carafe-aspp-deeplabv3plus.yaml chec
 ### 6.5 Monitoring
 
 ```bash
-watch -n 5 nvidia-smi                                   # utilization and VRAM headroom
+watch -n 5 nvidia-smi                                   # utilization and VRAM headroom on 1,2,3
 tail -f experiments/results/A4_3gpu_ddp/results.csv     # per-epoch metrics
 ```
 
@@ -370,7 +396,7 @@ results = model.train(
     epochs=100,
     batch=96,  # global batch, 32 images/GPU across 3 GPUs; must be divisible by 3
     imgsz=640,
-    device="0,1,2",
+    device="1,2,3",
     workers=8,  # per-GPU; 8 x 3 = 24 dataloader processes
     amp=True,
     seed=0,
@@ -391,7 +417,7 @@ Launch this as a script (`python train.py`), not from an interactive interpreter
 uv run --no-sync yolo segment train resume model=experiments/results/A4_3gpu_ddp/weights/last.pt
 ```
 
-The resumed run reuses the saved `device=0,1,2` and `batch`, so it re-forms the same 3-GPU DDP group. To change the batch size or GPU count you must start a fresh run rather than resume.
+The resumed run reuses the saved `device=1,2,3` and `batch`, so it re-forms the same 3-GPU DDP group. To change the batch size or GPU count you must start a fresh run rather than resume.
 
 A 100-epoch COCO-Seg run takes well over a day, so launch it detached under `tmux` (preferred — you can reattach to a live console) or `nohup`:
 
