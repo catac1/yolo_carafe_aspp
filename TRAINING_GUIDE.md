@@ -489,42 +489,52 @@ If GPU utilization sits well below ~90%, the dataloader is the bottleneck — ra
 
 ### 6.6 Shared Memory (/dev/shm)
 
-PyTorch stages every in-flight batch in `/dev/shm`. Containers commonly cap it at 64MB, which one 640px segmentation batch exceeds on its own. The symptom is not a clean startup failure but a crash partway into training:
+DataLoader workers hand batches to the training process through POSIX shared memory. Containers default `/dev/shm` to 64MB, and one 640px segmentation batch already exceeds that, so training fails — usually partway in, not at startup:
 
 ```text
-ERROR: Unexpected bus error encountered in worker. This might be caused by insufficient shared memory (shm).
+RuntimeError: unable to allocate shared memory(shm) for file </torch_50121_1510199154_15>: No space left on device (28)
 DataLoader worker (pid 12345) is killed by signal: Bus error.
 ```
 
-Check what you have:
+Check it:
 
 ```bash
 df -h /dev/shm
 ```
 
-**If you can change it**, give it room — roughly 1 GB per dataloader worker, so 16 GB for three stages at `WORKERS=6`:
+Rough requirement: `workers x prefetch(4) x batch x 3 x imgsz^2` bytes. At `WORKERS=6`, `BATCH=32`, `imgsz=640` that is **~900MB per stage**, and three concurrent stages need ~2.7GB. The dataloader warns at startup when `/dev/shm` is short of what it is about to demand.
+
+**There is no library-side workaround.** Both of torch's sharing strategies allocate through `shm_open` under `/dev/shm`; `file_system` only changes how regions are named and reclaimed, so `set_sharing_strategy("file_system")` does **not** move batches off the mount and does not help here. Only these do:
+
+**1. Enlarge it (best).** Inside the container as root, if it has `CAP_SYS_ADMIN`:
 
 ```bash
-docker run --shm-size=16g ...     # or --ipc=host
-sudo mount -o remount,size=16G /dev/shm
+mount -o remount,size=16G /dev/shm
 ```
 
-**If you cannot** — no root, no control over how the container starts — this branch handles it for you. `ultralytics/data/build.py` checks `/dev/shm` **at import**, before any worker can be forked, and when it is below 1 GB switches PyTorch to its `file_system` sharing strategy, which passes tensors through ordinary files under `TMPDIR` instead of shared memory. The check must run this early because workers inherit the strategy from the parent at fork time. You will see:
+At container start:
 
-```text
-WARNING /dev/shm has only 68MB available, below the 1024MB needed by 6 dataloader workers.
-Switching torch tensor sharing to 'file_system' to avoid worker 'Bus error' crashes.
+```bash
+docker run --shm-size=16g ...   # or --ipc=host
 ```
 
-Training then proceeds normally. Two caveats with that strategy:
+```yaml
+services:
+  train:
+    shm_size: '16gb'
+```
 
-- It consumes **file descriptors** rather than shared memory. If workers still fail, raise the limit — this needs no root, up to the hard limit: `ulimit -n 65535`. Check the ceiling with `ulimit -Hn`.
-- A hard-killed process can leave stray files in `TMPDIR`. Clear them between runs if it fills.
-- Batches now land in `TMPDIR` (default `/tmp`), so that must be real disk with room — check `df -h /tmp`. If `/tmp` is itself a small tmpfs, point it somewhere with space: `export TMPDIR=/home/user/yolo_custom/tmp`.
-- Override the automatic decision with `YOLO_FILE_SHARING=1` to force file sharing on, or `0` to force it off.
+**2. Load data in-process.** `workers=0` uses no shared memory at all, because there are no worker processes:
 
-Lowering `WORKERS` reduces the pressure but costs throughput, and on a small `/dev/shm` even `WORKERS=2` can fail — the fallback above is the reliable fix.
+```bash
+WORKERS=0 bash experiments/scripts/run_stage.sh A0 1
+```
 
+This always works and needs no privileges, but the dataloader then competes with training for the main process and will underfeed the GPU. Acceptable for a probe; costly for a 100-epoch run.
+
+**3. Shrink the demand.** Fewer workers and a smaller batch reduce it proportionally, but 64MB is roughly one batch, so no realistic setting fits — this only helps if `/dev/shm` is merely tight rather than tiny.
+
+Fix `/dev/shm` before starting the sweep. Option 2 will get a probe through today; option 1 is what you want for the real runs.
 
 ---
 

@@ -41,9 +41,6 @@ from ultralytics.utils import LINUX, LOGGER, RANK, colorstr
 from ultralytics.utils.checks import check_file
 from ultralytics.utils.torch_utils import TORCH_1_13, TORCH_2_0, TORCH_2_7, get_torch_device_backend
 
-SHM_MIN_BYTES = 1 << 30  # /dev/shm below this cannot hold a worker pool's in-flight batches
-
-
 class InfiniteDataLoader(dataloader.DataLoader):
     """DataLoader that reuses workers for infinite iteration.
 
@@ -315,43 +312,40 @@ def build_grounding(
     )
 
 
-def use_file_sharing_if_shm_small() -> None:
-    """Switch to file-based tensor sharing when /dev/shm is too small to stage dataloader batches.
+def check_shm(nw: int, batch: int, imgsz: int, prefetch: int) -> None:
+    """Warn when /dev/shm is too small for the dataloader's in-flight batches.
 
-    PyTorch's default 'file_descriptor' strategy stages every in-flight batch in /dev/shm via
-    shm_open. Containers commonly cap that at 64MB, which a single 640px segmentation batch exceeds,
-    producing 'No space left on device' or a worker 'Bus error'. The 'file_system' strategy uses
-    ordinary files under TMPDIR instead, so training survives a small /dev/shm with no host change.
+    DataLoader workers hand batches to the parent through POSIX shared memory, and BOTH of torch's
+    sharing strategies allocate it with shm_open under /dev/shm - 'file_system' only changes how the
+    region is named and reclaimed, not where it lives, so it is not a workaround for a small mount.
+    Containers default /dev/shm to 64MB, which one 640px segmentation batch already exceeds, and the
+    failure surfaces mid-epoch as 'No space left on device' or a worker 'Bus error'.
 
-    Runs at import, before any worker can be forked, because the strategy must already be set in the
-    parent for workers to inherit it. Set YOLO_FILE_SHARING=1 to force it on or 0 to force it off.
+    Args:
+        nw (int): Number of dataloader worker processes.
+        batch (int): Images per batch.
+        imgsz (int): Training image size.
+        prefetch (int): Batches each worker holds in flight.
     """
-    if not LINUX or torch.multiprocessing.get_sharing_strategy() == "file_system":
+    if nw <= 0 or not LINUX:
         return
-    override = os.getenv("YOLO_FILE_SHARING")
-    if override == "0":
+    try:
+        st = os.statvfs("/dev/shm")
+        available = st.f_bavail * st.f_frsize
+    except OSError:
         return
-    if override == "1":
-        available = -1
-    else:
-        try:
-            st = os.statvfs("/dev/shm")
-            available = st.f_bavail * st.f_frsize
-        except OSError:
-            return
-        if available >= SHM_MIN_BYTES:
-            return
-    torch.multiprocessing.set_sharing_strategy("file_system")
-    size = "forced by YOLO_FILE_SHARING=1" if available < 0 else f"only {available >> 20}MB available"
+    needed = nw * prefetch * batch * 3 * imgsz * imgsz  # uint8 images; masks and labels add more
+    if available >= needed:
+        return
     LOGGER.warning(
-        f"/dev/shm {size}, below the {SHM_MIN_BYTES >> 20}MB dataloader workers need. Switching torch "
-        f"tensor sharing to 'file_system', which stages batches under TMPDIR ({os.getenv('TMPDIR', '/tmp')}) "
-        f"instead. If workers still fail, raise the open-file limit ('ulimit -n 65535'), or start the "
-        f"container with '--shm-size=16g' or '--ipc=host'."
+        f"/dev/shm has {available >> 20}MB but {nw} workers x {prefetch} prefetched batches of "
+        f"{batch}x{imgsz}px need about {needed >> 20}MB. Training will likely fail with 'No space left "
+        f"on device'. Fix it by enlarging /dev/shm ('mount -o remount,size=16G /dev/shm' as root, or "
+        f"start the container with '--shm-size=16g' or '--ipc=host'), or run with workers=0 to load "
+        f"data in-process and use no shared memory at all."
     )
 
 
-use_file_sharing_if_shm_small()  # must run before any DataLoader forks a worker
 
 
 def build_dataloader(
@@ -402,6 +396,8 @@ def build_dataloader(
     # Do not create more worker processes than final loader batches. Single-batch loaders run in-process to avoid
     # persistent DataLoader worker pools that add overhead and can stall tiny datasets while holding CUDA context.
     nw = min(os.cpu_count() // max(nd, 1), workers, 0 if batches <= 1 else batches)  # number of workers
+    prefetch = (4 if shuffle else 2) if nw > 0 else 0
+    check_shm(nw, batch, getattr(dataset, "imgsz", 640), prefetch)
     generator = torch.Generator()
     generator.manual_seed((6148914691236517205 + RANK + seed) % (1 << 64))
     pin_memory = nd > 0 and pin_memory
@@ -414,7 +410,7 @@ def build_dataloader(
         shuffle=shuffle and sampler is None,
         num_workers=nw,
         sampler=sampler,
-        prefetch_factor=(4 if shuffle else 2) if nw > 0 else None,  # validation holds fewer batches between passes
+        prefetch_factor=prefetch or None,  # validation holds fewer batches between passes
         pin_memory=pin_memory,
         collate_fn=getattr(dataset, "collate_fn", None),
         worker_init_fn=seed_worker,
