@@ -5,6 +5,81 @@ This guide covers how to download and verify the **COCO 2017 Instance Segmentati
 **Target environment:** single Linux node with **3× NVIDIA RTX 6000** GPUs, headless (no display server), Python 3.12.
 The package depends on `opencv-python-headless`, so no X11/Qt libraries are required, and training runs entirely on PyTorch `.pt` weights — no export toolchains are installed.
 
+### First run on a new machine, in order
+
+Three things must exist before training, and none of them arrive with a `git clone` — `.venv/`, `uv.lock`, and `*.pt` are all gitignored:
+
+```bash
+uv venv --python 3.12 && source .venv/bin/activate   # §0  no env  -> ModuleNotFoundError: No module named 'cv2'
+uv pip install -e ".[extra]"                          # §0
+bash experiments/scripts/setup_checkpoints.sh         # §5.1 no weights -> FileNotFoundError: checkpoints/...pt
+uv run --no-sync yolo segment train ... data=coco8-seg.yaml epochs=1   # §6.2 smoke test before the real run
+```
+
+The dataset itself downloads on demand (§3), so it needs no separate step.
+
+---
+
+## 0. Environment Setup
+
+Do this first on a new machine. Every later command uses `uv run --no-sync`, and **`--no-sync` deliberately skips dependency installation** — it runs against an environment that already exists. Without this section you get:
+
+```text
+ModuleNotFoundError: No module named 'cv2'
+```
+
+The project requires **Python 3.12** (`requires-python = ">=3.12,<3.13"`).
+
+```bash
+# 1. Create the virtualenv with the pinned interpreter
+uv venv --python 3.12
+source .venv/bin/activate
+
+# 2. Install the package plus the training extras
+#    (albumentations for augmentation, faster-coco-eval for COCO mAP)
+uv pip install -e ".[extra]"
+```
+
+`.venv/` and `uv.lock` are both gitignored, so this step is per-machine and never arrives with the clone.
+
+### Verify the install
+
+```bash
+uv run --no-sync python -c "
+import torch, cv2, ultralytics
+print('ultralytics', ultralytics.__version__)
+print('cv2        ', cv2.__version__)
+print('torch      ', torch.__version__, 'cuda', torch.version.cuda)
+print('GPUs       ', torch.cuda.device_count())
+for i in range(torch.cuda.device_count()):
+    print('  ', i, torch.cuda.get_device_name(i))
+"
+```
+
+Expect three RTX 6000 entries before attempting any DDP run.
+
+### CUDA build of PyTorch
+
+The default PyPI `torch` wheel may not carry kernels for your GPU. If `torch.cuda.is_available()` is `False`, or training dies with `no kernel image is available for execution on the device`, install a matching CUDA build — for example for Blackwell (`sm_120`, RTX PRO 6000), which needs CUDA 12.8 or newer:
+
+```bash
+uv pip install --force-reinstall torch torchvision --index-url https://download.pytorch.org/whl/cu128
+```
+
+Check your architecture against the installed build with:
+
+```bash
+uv run --no-sync python -c "import torch; print(torch.cuda.get_arch_list())"
+```
+
+### A note on OpenCV
+
+The dependency is `opencv-python-headless`, which is correct for a headless training server and pulls no X11/Qt libraries. Do not install plain `opencv-python` alongside it — the two provide the same `cv2` module and installing both produces an unpredictable mix. If `cv2` is missing after setup, reinstall the package rather than adding OpenCV by hand:
+
+```bash
+uv pip install --force-reinstall opencv-python-headless
+```
+
 ---
 
 ## 1. COCO-Seg Dataset Overview

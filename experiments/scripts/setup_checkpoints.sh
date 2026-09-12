@@ -18,6 +18,17 @@ set -euo pipefail
 cd "$(dirname "$0")/../.."
 
 PY="${PY:-python}"
+
+# Fail early with an actionable message instead of a traceback from deep inside
+# the import chain when the virtualenv was never created or activated.
+if ! "$PY" -c "import cv2, torch, ultralytics" 2>/dev/null; then
+    echo "error: the ultralytics environment is not importable with '$PY'." >&2
+    echo "       Create and activate it first (see TRAINING_GUIDE.md section 0):" >&2
+    echo "         uv venv --python 3.12 && source .venv/bin/activate" >&2
+    echo "         uv pip install -e \".[extra]\"" >&2
+    exit 1
+fi
+
 mkdir -p checkpoints experiments/notes
 
 # A0: baseline, downloaded from the Ultralytics GitHub release assets
