@@ -39,7 +39,16 @@
 set -uo pipefail
 cd "$(dirname "$0")/../.."
 
-PY="${PY:-python}"
+# Run python the same way this script runs yolo: through uv, so the project
+# virtualenv is used whether or not it happens to be activated. Set PY to use a
+# specific interpreter instead (e.g. PY=/path/to/.venv/bin/python).
+py() {
+    if [ -n "${PY:-}" ]; then
+        "$PY" "$@"
+    else
+        uv run --no-sync python "$@"
+    fi
+}
 BATCH="${BATCH:-16}"
 EPOCHS="${EPOCHS:-100}"
 IMGSZ="${IMGSZ:-640}"
@@ -95,8 +104,8 @@ case "$gpu" in
     ''|*[!0-9]*) echo "error: GPU must be a single index, got '$gpu'" >&2; usage; exit 2 ;;
 esac
 
-if ! "$PY" -c "import cv2, torch, ultralytics" 2>/dev/null; then
-    echo "error: the ultralytics environment is not importable with '$PY'." >&2
+if ! py -c "import cv2, torch, ultralytics" 2>/dev/null; then
+    echo "error: the ultralytics environment is not importable." >&2
     echo "       See TRAINING_GUIDE.md section 0:" >&2
     echo "         uv venv --python 3.12 && source .venv/bin/activate && uv pip install -e '.[extra]'" >&2
     exit 1
@@ -176,7 +185,7 @@ if [ "$status" -eq 0 ]; then
             model="$out/weights/last.pt" data="$DATA" batch="$BATCH" imgsz="$IMGSZ" \
             device=0 workers="$WORKERS" plots=False > "$vlog" 2>&1
         echo
-        "$PY" - "$out/results.csv" "$vlog" "$PROBE_FRACTION" "$EPOCHS" "$stage" <<'PYEOF'
+        py - "$out/results.csv" "$vlog" "$PROBE_FRACTION" "$EPOCHS" "$stage" <<'PYEOF'
 import csv, re, sys
 
 csv_path, val_log, frac, epochs, stage = sys.argv[1], sys.argv[2], float(sys.argv[3]), int(sys.argv[4]), sys.argv[5]

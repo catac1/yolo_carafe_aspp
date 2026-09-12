@@ -426,6 +426,8 @@ bash experiments/scripts/run_stage.sh A4 2
 
 Each stage is pinned with `CUDA_VISIBLE_DEVICES=<gpu>` and runs with `device=0`, so it cannot touch a card another terminal is using. Output streams to the terminal and is tee'd to `experiments/results/logs/<stage>_1gpu_<timestamp>.log`. Results go to `<stage>_1gpu/`.
 
+The script calls both `yolo` and `python` through `uv run --no-sync`, so it works whether or not the virtualenv is activated — no outer `uv run` wrapper is needed. Set `PY=/path/to/python` to force a specific interpreter instead.
+
 Use `tmux` rather than plain SSH sessions, so a dropped connection does not kill a multi-day stage:
 
 ```bash
