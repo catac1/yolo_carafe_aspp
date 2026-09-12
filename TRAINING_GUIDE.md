@@ -413,9 +413,30 @@ DRY_RUN=1 bash experiments/scripts/run_ablation.sh    # print the commands, run 
 BATCH=192 bash experiments/scripts/run_ablation.sh    # 96 GB cards (§6.1)
 DEVICE=1,2 BATCH=64 bash experiments/scripts/run_ablation.sh   # two GPUs
 DATA=coco8-seg.yaml EPOCHS=1 BATCH=3 bash experiments/scripts/run_ablation.sh   # end-to-end check
+PROBE=1 bash experiments/scripts/run_ablation.sh      # measure time per stage, train nothing
 ```
 
-Settings, overridable by prefixing the command: `DEVICE=1,2,3`, `BATCH=96`, `EPOCHS=100`, `IMGSZ=640`, `WORKERS=8` (per GPU), `SEED=0`, `DATA=coco.yaml`, `PROJECT=experiments/results`.
+Settings, overridable by prefixing the command: `DEVICE=1,2,3`, `BATCH=96`, `EPOCHS=100`, `IMGSZ=640`, `WORKERS=8` (per GPU), `SEED=0`, `DATA=coco.yaml`, `PROJECT=experiments/results`, `PROBE=0`, `PROBE_FRACTION=0.01`.
+
+**Measure the cost before committing to it.** `PROBE=1` trains one epoch on 1% of the data per stage and extrapolates a per-epoch and total run time, so you know what the sweep costs before starting it:
+
+```bash
+PROBE=1 bash experiments/scripts/run_ablation.sh
+```
+
+It prints a measured table:
+
+```text
+  stage       probe      per epoch     100 epochs
+  ------ ---------- -------------- --------------
+  A0           ...            ...            ...
+  ...
+  TOTAL                                      ... d
+```
+
+Probe runs write to `<stage>_probe/` and never touch the real run directories, so they are safe to repeat. `PROBE_FRACTION=0.02` samples more data for a steadier number. The extrapolation is a **floor** — it scales one epoch's training time linearly and does not model per-epoch validation on the full 5,000-image val set, which the real runs pay every epoch.
+
+Use it to sanity-check the batch size too: if the probe shows a per-epoch time far above expectation, the dataloader is starving the GPUs (§6.5) before you have spent days finding out.
 
 **Re-entrancy.** A sweep of this length will be interrupted. Re-running the script:
 
