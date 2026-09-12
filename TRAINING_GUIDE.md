@@ -463,7 +463,13 @@ Note that `resume` restores the batch size, epoch count, and device from the che
 
 Override by prefixing the command, e.g. `BATCH=64 bash experiments/scripts/run_stage.sh A4 2`:
 
-`BATCH=32` (per stage - it owns one GPU), `EPOCHS=100`, `IMGSZ=640`, `WORKERS=6`, `SEED=0`, `DATA=coco.yaml`, `PROJECT=experiments/results`, `FORCE=0`, `PROBE=0`, `PROBE_FRACTION=0.01`.
+`BATCH=16` (per stage - it owns one GPU), `EPOCHS=100`, `IMGSZ=640`, `WORKERS=6`, `CACHE=` (none), `SEED=0`, `DATA=coco.yaml`, `PROJECT=experiments/results`, `FORCE=0`, `PROBE=0`, `PROBE_FRACTION=0.01`.
+
+**`CACHE`** decodes images once instead of every epoch, which matters when the dataloader is the bottleneck — especially at `WORKERS=0`:
+
+- `CACHE=ram` needs roughly 2x the decoded dataset size. Full COCO at 640px is far beyond any sane host, and `check_cache_ram` refuses and falls back with a warning rather than OOMing, so in practice it is only useful with a small `PROBE_FRACTION`.
+- `CACHE=disk` writes a `.npy` beside each image, needing comparable disk space and write access to the dataset directory. This is the one worth trying for full runs on a slow mount.
+- Unset means no caching, Ultralytics' default.
 
 **`batch` is per stage, not global.** `BATCH=32` means 32 images on that one card - the same per-GPU load as a DDP `batch=96` split three ways. Do not carry a DDP number over.
 

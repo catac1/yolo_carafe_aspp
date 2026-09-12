@@ -26,6 +26,9 @@
 #   EPOCHS=100     epochs
 #   IMGSZ=640      image size
 #   WORKERS=6      dataloader workers; every concurrent stage adds its own
+#   CACHE=         image cache: 'ram', 'disk', or empty for none. 'ram' needs about
+#                  2x the decoded dataset size and silently falls back if short;
+#                  'disk' writes .npy beside the images and needs write access
 #   SEED=0         fixed so stages stay comparable
 #   DATA=coco.yaml dataset; use coco8-seg.yaml for a fast end-to-end check
 #   PROJECT=experiments/results
@@ -41,6 +44,7 @@ BATCH="${BATCH:-16}"
 EPOCHS="${EPOCHS:-100}"
 IMGSZ="${IMGSZ:-640}"
 WORKERS="${WORKERS:-6}"
+CACHE="${CACHE:-}"
 SEED="${SEED:-0}"
 DATA="${DATA:-coco.yaml}"
 PROJECT="${PROJECT:-experiments/results}"
@@ -131,6 +135,7 @@ if [ "$PROBE" = "1" ]; then
         data="$DATA" epochs=3 fraction="$PROBE_FRACTION" batch="$BATCH" imgsz="$IMGSZ"
         device=0 workers="$WORKERS" amp=True seed="$SEED" val=False plots=False
         project="$PROJECT" name="$name")
+    [ -n "$CACHE" ] && args+=(cache="$CACHE")
     mode="timing probe on $PROBE_FRACTION of $DATA (train timed, val measured separately)"
 elif [ -f "$out/weights/last.pt" ] && [ "$FORCE" != "1" ]; then
     args=(segment train resume model="$out/weights/last.pt")
@@ -140,6 +145,7 @@ else
         data="$DATA" epochs="$EPOCHS" batch="$BATCH" imgsz="$IMGSZ"
         device=0 workers="$WORKERS" amp=True seed="$SEED"
         project="$PROJECT" name="$name")
+    [ -n "$CACHE" ] && args+=(cache="$CACHE")
     mode="training from $ckpt"
 fi
 
@@ -147,7 +153,7 @@ echo "=============================================================="
 echo " stage   $stage   ($config)"
 echo " gpu     $gpu (pinned via CUDA_VISIBLE_DEVICES; the stage sees it as device 0)"
 echo " mode    $mode"
-echo " batch   $BATCH   epochs $EPOCHS   imgsz $IMGSZ   workers $WORKERS   seed $SEED"
+echo " batch   $BATCH   epochs $EPOCHS   imgsz $IMGSZ   workers $WORKERS   seed $SEED${CACHE:+   cache $CACHE}"
 echo " out     $out"
 echo " log     $log"
 echo "=============================================================="
