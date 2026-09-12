@@ -251,11 +251,11 @@ This checks:
 
 | Stage  | Model Description                                          | Architecture Config YAML                                              | Pretrained Weights Checkpoint                                    |
 | :----- | :--------------------------------------------------------- | :-------------------------------------------------------------------- | :--------------------------------------------------------------- |
-| **A0** | Baseline YOLO26s-Seg                                        | `ultralytics/cfg/models/26/yolo26-seg.yaml`                            | `checkpoints/yolo26s-seg.pt`                                      |
-| **A1** | CARAFE Upsampling                                           | `experiments/configs/yolo26s-seg-carafe.yaml`                          | `checkpoints/yolo26s-seg-carafe_pretrained.pt`                    |
-| **A2** | ASPP Context Block                                          | `experiments/configs/yolo26s-seg-aspp.yaml`                            | `checkpoints/yolo26s-seg-aspp_pretrained.pt`                      |
-| **A3** | CARAFE + ASPP                                               | `experiments/configs/yolo26s-seg-carafe-aspp.yaml`                     | `checkpoints/yolo26s-seg-carafe-aspp_pretrained.pt`               |
-| **A4** | **Full Architecture** (CARAFE + ASPP + DeepLabV3+ Decoder)  | `experiments/configs/yolo26s-seg-carafe-aspp-deeplabv3plus.yaml`       | `checkpoints/yolo26s-seg-carafe-aspp-deeplabv3plus_pretrained.pt` |
+| **A0** | Baseline YOLO26s-Seg                                        | `ultralytics/cfg/models/26/yolo26${SCALE}-seg.yaml`                            | `checkpoints/yolo26s-seg.pt`                                      |
+| **A1** | CARAFE Upsampling                                           | `experiments/configs/yolo26${SCALE}-seg-carafe.yaml`                          | `checkpoints/yolo26s-seg-carafe_pretrained.pt`                    |
+| **A2** | ASPP Context Block                                          | `experiments/configs/yolo26${SCALE}-seg-aspp.yaml`                            | `checkpoints/yolo26s-seg-aspp_pretrained.pt`                      |
+| **A3** | CARAFE + ASPP                                               | `experiments/configs/yolo26${SCALE}-seg-carafe-aspp.yaml`                     | `checkpoints/yolo26s-seg-carafe-aspp_pretrained.pt`               |
+| **A4** | **Full Architecture** (CARAFE + ASPP + DeepLabV3+ Decoder)  | `experiments/configs/yolo26${SCALE}-seg-carafe-aspp-deeplabv3plus.yaml`       | `checkpoints/yolo26s-seg-carafe-aspp-deeplabv3plus_pretrained.pt` |
 
 ### 5.1 Rebuilding the Checkpoints on a New Machine
 
@@ -323,11 +323,11 @@ DDP splits the `batch` argument across GPUs, so **the global batch must be divis
 
 | Card                       | VRAM  | Per-GPU batch | `batch` (3 GPUs) |
 | :------------------------- | :---- | :------------ | :--------------- |
-| RTX 6000 (Turing)          | 24 GB | 16            | `48`             |
-| RTX 6000 Ada               | 48 GB | 32            | `96`             |
-| RTX PRO 6000 Blackwell     | 96 GB | 64            | `192`            |
+| RTX 6000 (Turing)          | 24 GB | 8             | `24`             |
+| RTX 6000 Ada               | 48 GB | 16            | `48`             |
+| RTX PRO 6000 Blackwell     | 96 GB | 32            | `96`             |
 
-These are starting points for YOLO26s-Seg at `imgsz=640` with `amp=True`. Segmentation masks make memory scale worse than detection, and the A4 DeepLabV3+ decoder is the heaviest of the five stages — if A4 hits CUDA OOM, drop one row and keep every stage on the same batch size so the ablation stays comparable.
+**Validation runs at `batch x 2` per GPU** (`trainer.py:306` for segmentation) and mask post-processing allocates in proportion, so the val pass at the end of every epoch — not training — is the binding limit. Measured on a 48 GB RTX 6000 Ada: A4 at 32 images/GPU reserves ~44 GB and then dies requesting a single 15.4 GB mask allocation during validation. These are starting points for YOLO26s-Seg at `imgsz=640` with `amp=True`. Segmentation masks make memory scale worse than detection, and the A4 DeepLabV3+ decoder is the heaviest of the five stages — if A4 hits CUDA OOM, drop one row and keep every stage on the same batch size so the ablation stays comparable.
 
 Confirm what you actually have before choosing:
 
@@ -373,7 +373,7 @@ uv run --no-sync yolo segment train \
 
 ```bash
 uv run --no-sync yolo segment train \
-  model=experiments/configs/yolo26s-seg-carafe-aspp-deeplabv3plus.yaml \
+  model=experiments/configs/yolo26${SCALE}-seg-carafe-aspp-deeplabv3plus.yaml \
   pretrained=checkpoints/yolo26s-seg-carafe-aspp-deeplabv3plus_pretrained.pt \
   data=coco.yaml \
   epochs=100 \
@@ -384,7 +384,7 @@ uv run --no-sync yolo segment train \
   amp=True \
   seed=0 \
   project=experiments/results \
-  name=A4_3gpu_ddp
+  name=A4_s_3gpu_ddp
 ```
 
 Notes specific to the 3-GPU setup:
@@ -438,6 +438,38 @@ Probe runs write to `<stage>_probe/` and never touch the real run directories, s
 
 Use it to sanity-check the batch size too: if the probe shows a per-epoch time far above expectation, the dataloader is starving the GPUs (§6.5) before you have spent days finding out.
 
+
+#### Model scale
+
+`SCALE` picks the width/depth preset and defaults to `s`, selecting both the architecture and the matching warm-start checkpoints:
+
+```bash
+SCALE=n bash experiments/scripts/setup_checkpoints.sh   # build that scale's checkpoints first
+SCALE=n bash experiments/scripts/run_ablation.sh
+```
+
+| `SCALE` | A4 params | Use |
+| :------ | :-------- | :------------------------------------- |
+| `n`     | 3.8 M     | fast iteration                          |
+| `s`     | 13.6 M    | **default** - what the plan targets     |
+| `m`     | 28.0 M    | more capacity, needs a smaller `BATCH`  |
+
+Configs are stored unscaled (`experiments/configs/yolo26-seg-carafe.yaml`) and Ultralytics resolves a scaled request against them, taking the scale from the filename. **The scale letter is load-bearing**: ask for the unscaled name and `yaml_model_load` sets `scale=''`, whereupon `parse_model` silently falls back to `n` — a nano model with most weights randomly initialised.
+
+Run directories carry the scale (`A4_s_3gpu_ddp`), so scales cannot overwrite each other.
+
+#### Resuming
+
+Re-run the identical command; resuming is the default. The script reads `last.pt`:
+
+| `last.pt` | Action |
+| :------------- | :--------------------------------------- |
+| absent | trains from the warm-start checkpoint |
+| `epoch` >= 0 | **resumes** from it |
+| `epoch == -1` | finished - skipped, `FORCE=1` to retrain |
+
+`epoch == -1` is what Ultralytics stamps into the final, optimizer-stripped checkpoint. That, not the presence of `best.pt`, is what finished means: `best.pt` appears as soon as epoch 1 improves fitness, so an interrupted run has both files and must still resume.
+
 **Re-entrancy.** A sweep of this length will be interrupted. Re-running the script:
 
 - **skips** a stage that already has `weights/best.pt` — it finished
@@ -456,7 +488,7 @@ tmux new -s ablation 'bash experiments/scripts/run_ablation.sh'
 
 ```bash
 watch -n 5 nvidia-smi                                   # utilization and VRAM headroom on 1,2,3
-tail -f experiments/results/A4_3gpu_ddp/results.csv     # per-epoch metrics
+tail -f experiments/results/A4_s_3gpu_ddp/results.csv     # per-epoch metrics
 ```
 
 If GPU utilization sits well below ~90%, the dataloader is the bottleneck — raise `workers`, or add `cache=ram` if the host has enough spare RAM (COCO-Seg at 640 px needs roughly 30+ GB).
@@ -495,7 +527,7 @@ Launch this as a script (`python train.py`), not from an interactive interpreter
 `resume` restores the optimizer state, epoch counter, and the full argument set from the checkpoint, so no other flags are needed — and none are honored:
 
 ```bash
-uv run --no-sync yolo segment train resume model=experiments/results/A4_3gpu_ddp/weights/last.pt
+uv run --no-sync yolo segment train resume model=experiments/results/A4_s_3gpu_ddp/weights/last.pt
 ```
 
 The resumed run reuses the saved `device=1,2,3` and `batch`, so it re-forms the same 3-GPU DDP group. To change the batch size or GPU count you must start a fresh run rather than resume.
