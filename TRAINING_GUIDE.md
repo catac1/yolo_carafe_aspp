@@ -273,11 +273,11 @@ This checks:
 
 | Stage  | Model Description                                          | Architecture Config YAML                                              | Pretrained Weights Checkpoint                                    |
 | :----- | :--------------------------------------------------------- | :-------------------------------------------------------------------- | :--------------------------------------------------------------- |
-| **A0** | Baseline YOLO26s-Seg                                        | `ultralytics/cfg/models/26/yolo26-seg.yaml`                            | `checkpoints/yolo26s-seg.pt`                                      |
-| **A1** | CARAFE Upsampling                                           | `experiments/configs/yolo26s-seg-carafe.yaml`                          | `checkpoints/yolo26s-seg-carafe_pretrained.pt`                    |
-| **A2** | ASPP Context Block                                          | `experiments/configs/yolo26s-seg-aspp.yaml`                            | `checkpoints/yolo26s-seg-aspp_pretrained.pt`                      |
-| **A3** | CARAFE + ASPP                                               | `experiments/configs/yolo26s-seg-carafe-aspp.yaml`                     | `checkpoints/yolo26s-seg-carafe-aspp_pretrained.pt`               |
-| **A4** | **Full Architecture** (CARAFE + ASPP + DeepLabV3+ Decoder)  | `experiments/configs/yolo26s-seg-carafe-aspp-deeplabv3plus.yaml`       | `checkpoints/yolo26s-seg-carafe-aspp-deeplabv3plus_pretrained.pt` |
+| **A0** | Baseline YOLO26s-Seg                                        | `ultralytics/cfg/models/26/yolo26${SCALE}-seg.yaml`                            | `checkpoints/yolo26s-seg.pt`                                      |
+| **A1** | CARAFE Upsampling                                           | `experiments/configs/yolo26${SCALE}-seg-carafe.yaml`                          | `checkpoints/yolo26s-seg-carafe_pretrained.pt`                    |
+| **A2** | ASPP Context Block                                          | `experiments/configs/yolo26${SCALE}-seg-aspp.yaml`                            | `checkpoints/yolo26s-seg-aspp_pretrained.pt`                      |
+| **A3** | CARAFE + ASPP                                               | `experiments/configs/yolo26${SCALE}-seg-carafe-aspp.yaml`                     | `checkpoints/yolo26s-seg-carafe-aspp_pretrained.pt`               |
+| **A4** | **Full Architecture** (CARAFE + ASPP + DeepLabV3+ Decoder)  | `experiments/configs/yolo26${SCALE}-seg-carafe-aspp-deeplabv3plus.yaml`       | `checkpoints/yolo26s-seg-carafe-aspp-deeplabv3plus_pretrained.pt` |
 
 ### 5.1 Rebuilding the Checkpoints on a New Machine
 
@@ -394,7 +394,7 @@ uv run --no-sync yolo segment train \
 
 ```bash
 uv run --no-sync yolo segment train \
-  model=experiments/configs/yolo26s-seg-carafe-aspp-deeplabv3plus.yaml \
+  model=experiments/configs/yolo26${SCALE}-seg-carafe-aspp-deeplabv3plus.yaml \
   pretrained=checkpoints/yolo26s-seg-carafe-aspp-deeplabv3plus_pretrained.pt \
   data=coco.yaml \
   epochs=100 \
@@ -436,6 +436,25 @@ DEVICE=0,1 BATCH=16 bash experiments/scripts/run_ablation.sh   # two GPUs
 DATA=coco8-seg.yaml EPOCHS=1 BATCH=3 bash experiments/scripts/run_ablation.sh   # end-to-end check
 PROBE=1 bash experiments/scripts/run_ablation.sh      # measure time per stage, train nothing
 ```
+
+#### Model scale
+
+`SCALE` selects the width/depth preset and defaults to `s`. It picks both the architecture and the matching warm-start checkpoints, so nothing else changes:
+
+```bash
+SCALE=n bash experiments/scripts/setup_checkpoints.sh   # build the nano checkpoint set first
+SCALE=n bash experiments/scripts/run_ablation.sh        # then train it
+```
+
+| `SCALE` | A4 params | Use |
+| :------ | :-------- | :-------------------------------------------- |
+| `n`     | 3.8 M     | fast iteration, fits anywhere                  |
+| `s`     | 13.6 M    | **default** - the configuration the plan targets |
+| `m`     | 28.0 M    | larger capacity, needs a smaller `BATCH`       |
+
+`l` and `x` are accepted too. Run directories carry the scale (`A4_s_3gpu_ddp`), so scales never overwrite each other and can coexist.
+
+The configs are stored unscaled (`experiments/configs/yolo26-seg-carafe.yaml`) and Ultralytics resolves a scaled request (`yolo26m-seg-carafe.yaml`) against them, taking the scale from the requested filename. **This is why the scale letter matters**: asking for the unscaled name directly gives `scale='n'` by default, which silently trains a nano model.
 
 Settings, overridable by prefixing the command: `DEVICE=0,1,2`, `BATCH=24`, `EPOCHS=100`, `IMGSZ=640`, `WORKERS=8` (per GPU), `SEED=0`, `DATA=coco.yaml`, `PROJECT=experiments/results`, `PROBE=0`, `PROBE_FRACTION=0.01`.
 
