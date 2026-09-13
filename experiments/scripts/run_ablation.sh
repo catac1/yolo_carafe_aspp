@@ -6,7 +6,7 @@
 #   bash experiments/scripts/run_ablation.sh              # all five stages
 #   bash experiments/scripts/run_ablation.sh A3 A4        # only these
 #   DRY_RUN=1 bash experiments/scripts/run_ablation.sh    # print commands, run nothing
-#   BATCH=96 bash experiments/scripts/run_ablation.sh     # override a setting
+#   BATCH=48 bash experiments/scripts/run_ablation.sh     # override a setting
 #   PROBE=1 bash experiments/scripts/run_ablation.sh      # time each stage, train nothing
 #
 # PROBE=1 trains one epoch on PROBE_FRACTION (default 1%) of the data per stage
@@ -19,9 +19,8 @@
 # with a weights/last.pt but no best.pt is resumed from that checkpoint.
 #
 # Settings (override by exporting or prefixing the command):
-#   DEVICE=1,2,3   GPUs to train on; GPU 0 is occupied (TRAINING_GUIDE.md §6.0)
-#   BATCH=48       global batch, 16 images/GPU; must divide by the GPU count (§6.1).
-#                  Validation runs at 2x batch per GPU and is the binding limit.
+#   DEVICE=0,1,2   GPUs to train on (TRAINING_GUIDE.md §6.0)
+#   BATCH=24       global batch, 8 images/GPU; must divide by the GPU count (§6.1)
 #   EPOCHS=100     epochs per stage
 #   IMGSZ=640      image size
 #   WORKERS=8      dataloader workers PER GPU
@@ -190,8 +189,9 @@ for s in "${selected[@]}"; do
         fi
         if uv run --no-sync yolo "${args[@]}" 2>&1 | tee "$log"; then
             vlog="$PROJECT/logs/${name}_val_$(date +%Y%m%d_%H%M%S).log"
-            echo "    $stage: timing one validation pass on the full val split"
-            uv run --no-sync yolo segment val model="$out/weights/last.pt" data="$DATA"                 batch="$BATCH" imgsz="$IMGSZ" device="$DEVICE" workers="$WORKERS"                 plots=False 2>&1 | tee "$vlog"
+            vbatch=$(( BATCH * 2 / ngpu ))   # trainer.py:293 makes the val batch per-rank
+            echo "    $stage: timing one validation pass (batch $vbatch on one GPU, as each rank sees)"
+            uv run --no-sync yolo segment val model="$out/weights/last.pt" data="$DATA" batch="$vbatch" imgsz="$IMGSZ" device="${DEVICE%%,*}" workers="$WORKERS" plots=False 2>&1 | tee "$vlog"
             row=$(py - "$out/results.csv" "$vlog" "$PROBE_FRACTION" "$EPOCHS" "$stage" <<'EOF'
 import csv, re, sys
 csv_path, val_log, frac, epochs, stage = sys.argv[1], sys.argv[2], float(sys.argv[3]), int(sys.argv[4]), sys.argv[5]
@@ -208,12 +208,15 @@ train_probe = times[1] - times[0] if len(times) > 2 else times[-1]
 train_full = train_probe / frac
 val_s = 0.0
 try:
-    text = open(val_log, encoding="utf-8", errors="replace").read()
-    ms = sum(float(x) for x in re.findall(r"([\d.]+)ms", re.search(r"Speed:.*per image", text).group(0)))
-    images = int(re.search(r"^\s*all\s+(\d+)\s+\d+", text, re.M).group(1))
+    text = open(val_log, encoding='utf-8', errors='replace').read().replace(chr(13), chr(10))
+    text = re.sub(chr(27) + chr(92) + '[[0-9;]*[A-Za-z]', '', text)   # strip ANSI
+    speed = re.search('Speed:[^' + chr(10) + ']*per image', text).group(0)
+    ms = sum(float(x) for x in re.findall('([0-9.]+)ms', speed))
+    images = int(re.search('(?m)^ *all +([0-9]+) +[0-9]+', text).group(1))
     val_s = ms * images / 1000
 except Exception:
-    pass
+    print(f'{stage}|VAL FAILED - see the log|0s|train time only|?')
+    raise SystemExit(0)
 epoch_s = train_full + val_s
 print(f"{stage}|{train_full / 60:.1f} min|{val_s:.0f}s|{epoch_s / 60:.1f} min|{epoch_s * epochs / 86400:.2f} d")
 EOF
