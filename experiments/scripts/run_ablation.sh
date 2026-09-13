@@ -6,7 +6,7 @@
 #   bash experiments/scripts/run_ablation.sh              # all five stages
 #   bash experiments/scripts/run_ablation.sh A3 A4        # only these
 #   DRY_RUN=1 bash experiments/scripts/run_ablation.sh    # print commands, run nothing
-#   BATCH=48 bash experiments/scripts/run_ablation.sh     # override a setting
+#   BATCH=24 bash experiments/scripts/run_ablation.sh     # override a setting
 #   PROBE=1 bash experiments/scripts/run_ablation.sh      # time each stage, train nothing
 #
 # PROBE=1 trains one epoch on PROBE_FRACTION (default 1%) of the data per stage
@@ -20,7 +20,7 @@
 #
 # Settings (override by exporting or prefixing the command):
 #   DEVICE=0,1,2   GPUs to train on (TRAINING_GUIDE.md §6.0)
-#   BATCH=24       global batch, 8 images/GPU; must divide by the GPU count (§6.1)
+#   BATCH=12       global batch, 4 images/GPU; must divide by the GPU count (§6.1)
 #   EPOCHS=100     epochs per stage
 #   IMGSZ=640      image size
 #   WORKERS=8      dataloader workers PER GPU
@@ -44,7 +44,7 @@ py() {
     fi
 }
 DEVICE="${DEVICE:-0,1,2}"
-BATCH="${BATCH:-24}"
+BATCH="${BATCH:-12}"
 EPOCHS="${EPOCHS:-100}"
 IMGSZ="${IMGSZ:-640}"
 WORKERS="${WORKERS:-8}"

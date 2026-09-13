@@ -343,7 +343,8 @@ DDP splits the `batch` argument across GPUs, so **the global batch must be divis
 
 | Per-GPU batch | `batch` (3× RTX 3090) | Notes                                                         |
 | :------------ | :-------------------- | :------------------------------------------------------------ |
-| 8             | `24`                  | **Plan default.** Comfortable headroom on 24 GB, including A4. |
+| 4             | `12`                  | **Default.** Largest headroom; noisiest BatchNorm.             |
+| 8             | `24`                  | Plan target. Comfortable on 24 GB, including A4.               |
 | 16            | `48`                  | Only if §6.2 shows real headroom; verify on A4 first.          |
 
 24 GB is the binding constraint here. Segmentation masks make memory scale worse than detection, and the A4 DeepLabV3+ decoder is the heaviest of the five stages, so a batch that fits A0 may still OOM on A4. **Keep `batch` identical across all five stages** — if A4 does not fit at 48, run the whole ablation at 24 rather than varying it, or the comparison is meaningless.
@@ -390,7 +391,7 @@ uv run --no-sync yolo segment train \
 
 ### 6.3 Full Training (3× RTX 3090 DDP)
 
-`batch=24` is the plan default for 24 GB cards — see §6.1 before raising it:
+`batch=12` is the default for 24 GB cards — see §6.1 before raising it:
 
 ```bash
 uv run --no-sync yolo segment train \
@@ -398,7 +399,7 @@ uv run --no-sync yolo segment train \
   pretrained=checkpoints/yolo26s-seg-carafe-aspp-deeplabv3plus_pretrained.pt \
   data=coco.yaml \
   epochs=100 \
-  batch=24 \
+  batch=12 \
   imgsz=640 \
   device=0,1,2 \
   workers=8 \
@@ -456,7 +457,7 @@ SCALE=n bash experiments/scripts/run_ablation.sh        # then train it
 
 The configs are stored unscaled (`experiments/configs/yolo26-seg-carafe.yaml`) and Ultralytics resolves a scaled request (`yolo26m-seg-carafe.yaml`) against them, taking the scale from the requested filename. **This is why the scale letter matters**: asking for the unscaled name directly gives `scale='n'` by default, which silently trains a nano model.
 
-Settings, overridable by prefixing the command: `DEVICE=0,1,2`, `BATCH=24`, `EPOCHS=100`, `IMGSZ=640`, `WORKERS=8` (per GPU), `SEED=0`, `DATA=coco.yaml`, `PROJECT=experiments/results`, `PROBE=0`, `PROBE_FRACTION=0.01`.
+Settings, overridable by prefixing the command: `DEVICE=0,1,2`, `BATCH=12`, `EPOCHS=100`, `IMGSZ=640`, `WORKERS=8` (per GPU), `SEED=0`, `DATA=coco.yaml`, `PROJECT=experiments/results`, `PROBE=0`, `PROBE_FRACTION=0.01`.
 
 **Measure the cost before committing to it.** `PROBE=1` trains one epoch on 1% of the data per stage and extrapolates a per-epoch and total run time, so you know what the sweep costs before starting it:
 
@@ -517,7 +518,7 @@ model = YOLO("checkpoints/yolo26s-seg-carafe-aspp-deeplabv3plus_pretrained.pt")
 results = model.train(
     data="coco.yaml",
     epochs=100,
-    batch=24,  # global batch, 8 images/GPU across 3 GPUs; must be divisible by 3
+    batch=12,  # global batch, 4 images/GPU across 3 GPUs; must be divisible by 3
     imgsz=640,
     device="0,1,2",
     workers=8,  # per-GPU; 8 x 3 = 24 dataloader processes
