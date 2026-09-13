@@ -222,7 +222,7 @@ if [ "$status" -eq 0 ]; then
         echo "Measuring one validation pass on the full val split ..."
         CUDA_VISIBLE_DEVICES="$gpu" uv run --no-sync yolo segment val \
             model="$out/weights/last.pt" data="$DATA" batch="$BATCH" imgsz="$IMGSZ" \
-            device=0 workers="$WORKERS" plots=False > "$vlog" 2>&1
+            device=0 workers="$WORKERS" plots=False 2>&1 | tee "$vlog"
         echo
         py - "$out/results.csv" "$vlog" "$PROBE_FRACTION" "$EPOCHS" "$stage" <<'PYEOF'
 import csv, re, sys
