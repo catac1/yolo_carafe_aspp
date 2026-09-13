@@ -63,7 +63,10 @@ dependencies = [
     "pillow>=7.1.2",
     "pyyaml>=5.3.1",
     "requests>=2.23.0",
-    "torch>=1.8.0",
+    # Upper bound deliberately: an unbounded torch resolved to 2.14.0+cu130, which is
+    # newer than this Ultralytics targets (it warns that broadcast_buffers is deprecated)
+    # and produced SIGSEGV under DDP and "free(): invalid pointer" at teardown on Ampere.
+    "torch>=2.4.0,<2.13",
     "torchvision>=0.9.0",
     "psutil>=5.8.0", # system utilization
     "polars>=0.20.0",
