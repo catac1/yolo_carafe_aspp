@@ -191,7 +191,7 @@ for s in "${selected[@]}"; do
         if uv run --no-sync yolo "${args[@]}" 2>&1 | tee "$log"; then
             vlog="$PROJECT/logs/${name}_val_$(date +%Y%m%d_%H%M%S).log"
             echo "    $stage: timing one validation pass on the full val split"
-            uv run --no-sync yolo segment val model="$out/weights/last.pt" data="$DATA"                 batch="$BATCH" imgsz="$IMGSZ" device="$DEVICE" workers="$WORKERS"                 plots=False > "$vlog" 2>&1
+            uv run --no-sync yolo segment val model="$out/weights/last.pt" data="$DATA"                 batch="$BATCH" imgsz="$IMGSZ" device="$DEVICE" workers="$WORKERS"                 plots=False 2>&1 | tee "$vlog"
             row=$(py - "$out/results.csv" "$vlog" "$PROBE_FRACTION" "$EPOCHS" "$stage" <<'EOF'
 import csv, re, sys
 csv_path, val_log, frac, epochs, stage = sys.argv[1], sys.argv[2], float(sys.argv[3]), int(sys.argv[4]), sys.argv[5]
