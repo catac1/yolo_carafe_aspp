@@ -219,9 +219,9 @@ if [ "$status" -eq 0 ]; then
         # Time one validation pass on the full val split, the cost every real epoch pays.
         vlog="$PROJECT/logs/${name}_val_$(date +%Y%m%d_%H%M%S).log"
         echo
-        echo "Measuring one validation pass on the full val split ..."
+        echo "Measuring one validation pass on the full val split (batch $(( BATCH * 2 )), as training does) ..."
         CUDA_VISIBLE_DEVICES="$gpu" uv run --no-sync yolo segment val \
-            model="$out/weights/last.pt" data="$DATA" batch="$BATCH" imgsz="$IMGSZ" \
+            model="$out/weights/last.pt" data="$DATA" batch="$(( BATCH * 2 ))" imgsz="$IMGSZ" \
             device=0 workers="$WORKERS" plots=False 2>&1 | tee "$vlog"
         echo
         py - "$out/results.csv" "$vlog" "$PROBE_FRACTION" "$EPOCHS" "$stage" <<'PYEOF'
@@ -247,12 +247,14 @@ train_full = train_probe / frac
 # startup and dataset scan a standalone val run pays but a training epoch does not.
 val_s = 0.0
 try:
-    text = open(val_log, encoding="utf-8", errors="replace").read()
-    ms = sum(float(x) for x in re.findall(r"([\d.]+)ms", re.search(r"Speed:.*per image", text).group(0)))
-    images = int(re.search(r"^\s*all\s+(\d+)\s+\d+", text, re.M).group(1))
+    text = open(val_log, encoding='utf-8', errors='replace').read().replace(chr(13), chr(10))
+    text = re.sub(chr(27) + chr(92) + '[[0-9;]*[A-Za-z]', '', text)   # strip ANSI
+    speed = re.search('Speed:[^' + chr(10) + ']*per image', text).group(0)
+    ms = sum(float(x) for x in re.findall('([0-9.]+)ms', speed))
+    images = int(re.search('(?m)^ *all +([0-9]+) +[0-9]+', text).group(1))
     val_s = ms * images / 1000
 except Exception:
-    pass
+    print(f'{stage}: VALIDATION TIMING FAILED - see {val_log}; the train figure below excludes it')
 
 epoch_s = train_full + val_s
 total_d = epoch_s * epochs / 86400
