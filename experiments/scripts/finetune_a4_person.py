@@ -9,7 +9,7 @@ from ultralytics.data.utils import img2label_paths
 
 ROOT = Path(__file__).resolve().parents[2]
 DATA_ROOT = Path("/workspace/coco_dataset/coco")
-TRAIN_LIST = DATA_ROOT / "train.txt"
+TRAIN_LIST = DATA_ROOT / "train2017.txt"
 FOCUS_LIST = DATA_ROOT / "train_person_focus.txt"
 DATA_CONFIG = ROOT / "experiments/configs/coco_remote_person_focus.yaml"
 CHECKPOINT = ROOT / "runs/segment/experiments/results/A4_local-2/weights/best.pt"
@@ -27,11 +27,14 @@ def create_person_focus_list() -> None:
         image = Path(line.strip())
         image = (image if image.is_absolute() else DATA_ROOT / image).resolve()
         if not image.is_file():
-            raise FileNotFoundError(f"Training image from {TRAIN_LIST} not found: {image}")
+            raise FileNotFoundError(
+                f"Training image from {TRAIN_LIST} not found: {image}"
+            )
         image_paths.append(str(image))
         label = Path(img2label_paths([str(image)])[0])
         is_person = label.is_file() and any(
-            row.split()[:1] == ["0"] for row in label.read_text(encoding="utf-8").splitlines()
+            row.split()[:1] == ["0"]
+            for row in label.read_text(encoding="utf-8").splitlines()
         )
         if is_person:
             person_images += 1
@@ -42,14 +45,18 @@ def create_person_focus_list() -> None:
     if not image_paths:
         raise ValueError(f"No training images found in {TRAIN_LIST}")
     FOCUS_LIST.write_text("\n".join(image_paths) + "\n", encoding="utf-8")
-    print(f"Wrote {len(image_paths):,} paths; repeated {repeated:,} of {person_images:,} person-positive images.")
+    print(
+        f"Wrote {len(image_paths):,} paths; repeated {repeated:,} of {person_images:,} person-positive images."
+    )
 
 
 def main() -> None:
     """Prepare the weighted manifest and start A4 fine-tuning."""
     create_person_focus_list()
     if not DATA_CONFIG.is_file() or not CHECKPOINT.is_file():
-        raise FileNotFoundError(f"Missing dataset config or starting checkpoint: {DATA_CONFIG}, {CHECKPOINT}")
+        raise FileNotFoundError(
+            f"Missing dataset config or starting checkpoint: {DATA_CONFIG}, {CHECKPOINT}"
+        )
     YOLO(str(CHECKPOINT)).train(
         data=str(DATA_CONFIG),
         epochs=25,
