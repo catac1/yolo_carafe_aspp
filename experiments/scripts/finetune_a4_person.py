@@ -16,7 +16,11 @@ CHECKPOINT = ROOT / "runs/segment/experiments/results/A4_local-2/weights/best.pt
 
 
 def create_person_focus_list() -> None:
-    """Repeat a fixed-seed half of person-positive training images once."""
+    """Create the person-focused manifest once, reusing an existing non-empty file."""
+    if FOCUS_LIST.is_file() and FOCUS_LIST.stat().st_size > 0:
+        print(f"Using existing person-focused manifest: {FOCUS_LIST}")
+        return
+
     if not TRAIN_LIST.is_file():
         raise FileNotFoundError(f"COCO training image list not found: {TRAIN_LIST}")
 

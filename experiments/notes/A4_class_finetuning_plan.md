@@ -38,7 +38,8 @@ test: test-dev2017.txt
 
 The script `experiments/scripts/finetune_a4_person.py` reads the existing `train2017.txt` and segmentation labels,
 then writes `/workspace/coco_dataset/coco/train_person_focus.txt` on the remote machine. That generated list is not
-checked into the repo because it belongs beside the remote dataset.
+checked into the repo because it belongs beside the remote dataset. On later runs, the script reuses this manifest
+when it exists and is non-empty; delete it to regenerate after changing the source list or labels.
 
 For the first person-focused run:
 
