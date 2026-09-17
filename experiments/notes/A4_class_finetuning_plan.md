@@ -36,7 +36,7 @@ val: val2017.txt
 test: test-dev2017.txt
 ```
 
-The script `experiments/scripts/finetune_a4_person.py` reads the existing `train.txt` and segmentation labels,
+The script `experiments/scripts/finetune_a4_person.py` reads the existing `train2017.txt` and segmentation labels,
 then writes `/workspace/coco_dataset/coco/train_person_focus.txt` on the remote machine. That generated list is not
 checked into the repo because it belongs beside the remote dataset.
 
@@ -63,26 +63,34 @@ other labels from training images and can teach the model that those objects are
 ## 3. Controlled fine-tuning runs
 
 The script runs the person-focused experiment from A4 `best.pt`. For a sampler control, run the same settings from the
-same checkpoint with a separate config that points `train:` to the original `train.txt`; keep the validation
+same checkpoint with a separate config that points `train:` to the original `train2017.txt`; keep the validation
 split and all other settings identical.
 
-| Setting                 | Initial value                                                          |
-| ----------------------- | ---------------------------------------------------------------------- |
-| Starting checkpoint     | `runs/segment/experiments/results/A4_local-2/weights/best.pt`          |
-| Resume optimizer state  | `False` — start a new fine-tuning schedule from the checkpoint weights |
-| Epochs / early stopping | `25` / `patience=7`                                                    |
-| Image size / batch      | `640` / `32` if it fits the target GPU                                 |
-| Initial learning rate   | `0.001`                                                                |
-| LR schedule             | Cosine (`cos_lr=True`)                                                 |
-| Final LR fraction       | `lrf=0.01` (final LR about `1e-5`)                                     |
-| Mosaic close            | `5`                                                                    |
-| Checkpoint interval     | `save_period=5`                                                        |
-| `cls_pw`                | `0.0` for the first comparison, to isolate sampling                    |
+For a single Linux host with three RTX 6000 GPUs, the script selects `device=[1, 2, 3]`. Ultralytics launches DDP
+workers automatically, so run the script once and do not wrap it in `torchrun`. In this repo, `batch` is the global
+batch split across ranks; `batch=33` gives 11 images per GPU and keeps the nominal effective batch near the previous
+batch-32 setup with the default `nbs=64`. `workers=4` is per rank, or 12 dataloader workers total; adjust it if CPU or
+storage becomes the input bottleneck.
+
+| Setting                   | Initial value                                                          |
+| ------------------------- | ---------------------------------------------------------------------- |
+| Starting checkpoint       | `runs/segment/experiments/results/A4_local-2/weights/best.pt`          |
+| Resume optimizer state    | `False` — start a new fine-tuning schedule from the checkpoint weights |
+| Epochs / early stopping   | `25` / `patience=7`                                                    |
+| Image size / global batch | `640` / `33` total (11 images per GPU)                                 |
+| DDP devices               | `device=[1, 2, 3]` on one Linux host                                   |
+| Dataloader workers        | `4` per rank (12 total)                                                |
+| Initial learning rate     | `0.001`                                                                |
+| LR schedule               | Cosine (`cos_lr=True`)                                                 |
+| Final LR fraction         | `lrf=0.01` (final LR about `1e-5`)                                     |
+| Mosaic close              | `5`                                                                    |
+| Checkpoint interval       | `save_period=5`                                                        |
+| `cls_pw`                  | `0.0` for the first comparison, to isolate sampling                    |
 
 Use this cosine schedule for both the control and person-focused runs. The original A4 run used linear decay
 (`cos_lr=False`), so cosine is a shared fine-tuning change rather than a difference between the two experiments.
 
-Run the script from the repository root on the remote training machine:
+Run the script once from the repository root on the remote training machine:
 
 ```bash
 uv run --no-sync python experiments/scripts/finetune_a4_person.py

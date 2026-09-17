@@ -61,7 +61,9 @@ def main() -> None:
         data=str(DATA_CONFIG),
         epochs=25,
         imgsz=640,
-        batch=32,
+        batch=33,  # Global batch: 11 images per GPU across 3 GPUs
+        device=[1, 2, 3],
+        workers=4,  # Per rank: 12 dataloader workers total
         cos_lr=True,
         lr0=0.001,
         lrf=0.01,
