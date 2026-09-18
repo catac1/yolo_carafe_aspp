@@ -2,21 +2,67 @@
 
 ## Summary
 
-This report compares three YOLO26 segmentation checkpoints on the same COCO 2017 validation split, with emphasis on the requested classes:
+This report now includes the full A0–A4 experiment series using its saved training-validation logs. It also retains the
+previously completed common-protocol comparison for A0, A4, and the official checkpoint. No inference or validation was
+rerun for this update.
+
+The requested focus classes are:
 
 `person` (human), `bicycle`, `car`, `motorcycle`, `bus`, and `truck`.
 
 The primary metric is mask AP50-95. Higher is better.
 
-| Model                | Checkpoint                                                    | Training/evaluation role                                                                                  |
-| -------------------- | ------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
-| A0 RTX6000 baseline  | `runs/segment/experiments/results/A0_local/weights/best.pt`   | Original YOLO26s-seg architecture trained locally on RTX6000                                              |
-| A4 custom            | `runs/segment/experiments/results/A4_local-2/weights/best.pt` | CARAFE + ASPP + DeepLabV3+ configuration ([config](../configs/yolo26-seg-carafe-aspp-deeplabv3plus.yaml)) |
-| Official Ultralytics | `checkpoints/yolo26s-seg.pt`                                  | Official provided checkpoint, evaluated directly                                                          |
+| Run | Intended variant | Saved best checkpoint |
+| --- | --- | --- |
+| A0 | YOLO26s-seg baseline | `runs/segment/experiments/results/A0_local/weights/best.pt` |
+| A1 | CARAFE ([config](../configs/yolo26-seg-carafe.yaml)) | `runs/segment/experiments/results/A1_local/weights/best.pt` |
+| A2 | ASPP-only ([config](../configs/yolo26-seg-aspp.yaml)); see the run caveat below | `runs/segment/experiments/results/A2_local/weights/best.pt` |
+| A3 | CARAFE + ASPP ([config](../configs/yolo26-seg-carafe-aspp.yaml)) | `runs/segment/experiments/results/A3_local/weights/best.pt` |
+| A4 | CARAFE + ASPP + DeepLabV3+ ([config](../configs/yolo26-seg-carafe-aspp-deeplabv3plus.yaml)) | `runs/segment/experiments/results/A4_local-2/weights/best.pt` |
+| Official | Official Ultralytics checkpoint | `checkpoints/yolo26s-seg.pt` |
 
-The A4 model improves the fresh full-validation mask mAP50-95 from **0.38945** to **0.39161** versus A0, a gain of **+0.00216**. The official checkpoint reaches **0.39285**.
+### Saved A0–A4 training-validation results
 
-## Evaluation Protocol
+These values come from the already-saved `results.csv` files. For each run, the row is the epoch with the highest mask
+mAP50-95; all values in that row are reported together. The saved arguments share `coco.yaml`, 640 image size, batch
+32, 100 epochs, and seed 0. The GPU IDs differ. These are per-run best validation results, not a new common-protocol
+re-evaluation.
+
+The mask mAP50-95 cells rank the five saved runs: green = highest, yellow = second, orange = tied middle, and red = lowest.
+
+<table>
+<thead>
+<tr><th>Run</th><th>Best epoch</th><th>Box P</th><th>Box R</th><th>Box mAP50</th><th>Box mAP50-95</th><th>Mask P</th><th>Mask R</th><th>Mask mAP50</th><th>Mask mAP50-95</th></tr>
+</thead>
+<tbody>
+<tr><td>A0</td><td>91</td><td>0.71405</td><td>0.57778</td><td>0.63649</td><td>0.46617</td><td>0.71449</td><td>0.55642</td><td>0.60960</td><td><span style="background-color:#f4cccc;color:#7f0000;padding:2px 6px;border-radius:4px">0.39474</span></td></tr>
+<tr><td>A1</td><td>92</td><td><strong>0.72561</strong></td><td>0.57583</td><td>0.63665</td><td>0.46789</td><td>0.71518</td><td><strong>0.56126</strong></td><td>0.60992</td><td><span style="background-color:#fff2cc;color:#7f6000;padding:2px 6px;border-radius:4px">0.39619</span></td></tr>
+<tr><td>A2</td><td>91</td><td>0.70833</td><td>0.57733</td><td>0.63635</td><td>0.46715</td><td>0.70948</td><td>0.55764</td><td>0.61014</td><td><span style="background-color:#fce5cd;color:#783f04;padding:2px 6px;border-radius:4px">0.39533</span></td></tr>
+<tr><td>A3</td><td>91</td><td>0.70833</td><td>0.57733</td><td>0.63635</td><td>0.46715</td><td>0.70948</td><td>0.55764</td><td>0.61014</td><td><span style="background-color:#fce5cd;color:#783f04;padding:2px 6px;border-radius:4px">0.39533</span></td></tr>
+<tr><td>A4</td><td>92</td><td>0.72519</td><td>0.58144</td><td><strong>0.64082</strong></td><td><strong>0.47056</strong></td><td><strong>0.72381</strong></td><td>0.56082</td><td><strong>0.61404</strong></td><td><span style="background-color:#d9ead3;color:#1b5e20;padding:2px 6px;border-radius:4px"><strong>0.39683</strong></span></td></tr>
+</tbody>
+</table>
+
+| Run | Saved mask mAP50-95 | Delta vs A0 |
+| --- | ------------------: | ----------: |
+| A0 | 0.39474 | baseline |
+| A1 | 0.39619 | +0.00145 |
+| A2 | 0.39533 | +0.00059 |
+| A3 | 0.39533 | +0.00059 |
+| A4 | 0.39683 | +0.00209 |
+
+**A2 run caveat:** `A2_local/args.yaml` records `checkpoints/yolo26s-seg-carafe-aspp_pretrained.pt` as its starting model. That is the
+CARAFE+ASPP checkpoint used by A3; the intended ASPP-only checkpoint is `checkpoints/yolo26s-seg-aspp_pretrained.pt`
+([A2 transfer report](A2_weight_transfer_report.md)). A2 and A3 therefore have identical saved best-row metrics to the
+precision shown, and A2 should not be treated as a valid ASPP-only ablation.
+
+In these stored logs, A4 has the best overall mask mAP50-95 (**0.39683**), followed by A1 (**0.39619**), A2/A3
+(**0.39533**), and A0 (**0.39474**). A1 has the highest mask recall; A4 leads the other aggregate mask metrics.
+
+## Previously completed common-validation protocol
+
+The common-protocol values below were already measured for A0, A4, and the official checkpoint. A1–A3 were not part of
+that comparison and are not added to it here; this preserves the existing measurements without rerunning validation.
 
 | Item                              | Value                                                        |
 | --------------------------------- | ------------------------------------------------------------ |
@@ -31,9 +77,10 @@ The A4 model improves the fresh full-validation mask mAP50-95 from **0.38945** t
 | Confidence / IoU / max detections | `0.001 / 0.7 / 300`                                          |
 | NMS mode                          | External NMS (`nms=None`)                                    |
 
-All three models were evaluated with the same settings. The fresh validation values below are authoritative; training CSV values are included only as historical context.
+A0, A4, and the official checkpoint were evaluated with the same settings. The fresh values below are authoritative for
+that three-model comparison; the A0–A4 training-log table above is a separate historical comparison.
 
-## Aggregate Results
+## Existing common-protocol aggregate results (A0, A4, and official)
 
 Values are rounded to three decimals. Mask metrics are the main result; box metrics are included as secondary detection context.
 
@@ -61,9 +108,12 @@ Values are rounded to three decimals. Mask metrics are the main result; box metr
 | Mask mAP50     | **+0.00284** |
 | Mask mAP50-95  | **+0.00216** |
 
-## Requested-Class Mask Comparison
+## Existing requested-class mask comparison (A0, A4, and official)
 
-The colored AP50-95 cells rank the three models within each class: green = highest, yellow = middle, red = lowest. The delta column is A4 minus A0: green = improvement, red = decrease, yellow = near-zero change (`|delta| < 0.001`).
+The colored AP50-95 cells rank these three previously measured models within each class: green = highest, yellow = middle,
+red = lowest. The delta column is A4 minus A0: green = improvement, red = decrease, yellow = near-zero change
+(`|delta| < 0.001`). The saved training CSVs for A1–A3 contain aggregate metrics only; no new class-wise evaluation was
+run, so those variants are intentionally absent from this table.
 
 <table>
 <thead>
@@ -102,7 +152,7 @@ This is the arithmetic mean over the six requested classes, not the official all
 | A4 custom               |          0.739 |       0.596 |     0.661 |        0.404 |
 | Official yolo26s-seg.pt |          0.753 |       0.593 |     0.667 |        0.410 |
 
-## Findings
+## Findings from the existing common-protocol class comparison
 
 - **Overall:** A4 improves the baseline on aggregate mask AP50-95 by **+0.00216**, but remains **0.00124** below the official checkpoint.
 - **Car:** A4 improves mask AP50-95 by **+0.004** over A0.
@@ -112,13 +162,5 @@ This is the arithmetic mean over the six requested classes, not the official all
 - **Bus:** A4 is effectively tied with A0 within `0.001`, while the official checkpoint is higher.
 - **Official checkpoint:** It is the strongest mask model on five of the six requested classes; A4 is strongest only on truck by a negligible margin.
 
-## Historical Training-Run Context
-
-The stored 100-epoch training logs reported:
-
-| Run        | Stored best mask mAP50-95 | Stored best mask mAP50 |
-| ---------- | ------------------------: | ---------------------: |
-| A0 local   |                   0.39474 |                0.60960 |
-| A4 local-2 |                   0.39683 |                0.61404 |
-
-Those values differ slightly from the fresh common validation above because the report intentionally re-evaluates all three checkpoints under one controlled protocol.
+The stored A0–A4 values above differ from the existing common-validation results because the latter were produced in a
+separate controlled evaluation. Do not compare numbers across those two tables as if they were from one evaluation pass.
