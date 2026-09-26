@@ -1,7 +1,6 @@
 # Ultralytics 🚀 AGPL-3.0 License - https://ultralytics.com/license
 """Unit tests for CARAFE upsampling module in YOLO26s-Seg."""
 
-import pytest
 import torch
 
 from ultralytics.nn.modules.custom_seg import CARAFE
